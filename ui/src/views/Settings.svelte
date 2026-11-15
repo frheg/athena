@@ -4,6 +4,7 @@
   import { app, toast, refreshStats } from '../lib/state.svelte.js'
   import { toolName, classHelp, args, when } from '../lib/format.js'
   import Kpi from '../lib/Kpi.svelte'
+  import SpeechSettings from './parts/SpeechSettings.svelte'
 
   let tools = $state(null)
   let perms = $state([])
@@ -132,6 +133,8 @@
       {t('Limits: {r} model rounds per turn, {c} tool calls per minute per conversation. Jobs may do on their own: {j}.', { r: tools.limits.rounds_per_turn, c: tools.limits.calls_per_minute, j: tools.jobs_may.join(', ') })}
     </p>
   {/if}
+  {#if app.status?.info?.speech}<SpeechSettings />{/if}
+
   {#if app.status}
     <p class="mono-sm">{t('Policy file')}: {app.status.info.policy_file}</p>
   {/if}

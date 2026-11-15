@@ -19,6 +19,7 @@ import (
 	"github.com/frheg/athena/internal/files"
 	"github.com/frheg/athena/internal/gate"
 	"github.com/frheg/athena/internal/memory"
+	"github.com/frheg/athena/internal/speech"
 	"github.com/frheg/athena/internal/store"
 )
 
@@ -28,6 +29,7 @@ type API struct {
 	Scheduler *engine.Scheduler
 	Memory    *memory.Client // nil: no memory service
 	Files     *files.Client  // nil: no attachments
+	Speech    *speech.Client // nil: nothing is read aloud
 	Owner     string         // the one user, for now
 	Token     string         // API_TOKEN: when set, every request needs "Authorization: Bearer <token>"
 	Version   string
@@ -113,6 +115,10 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("PUT /api/models/active", a.setActive)
 	m.HandleFunc("GET /api/stats", a.stats)
 	m.HandleFunc("/api/memory/", a.memoryProxy)
+	m.HandleFunc("GET /api/messages/{id}/speech", a.messageSpeech)
+	m.HandleFunc("GET /api/speech", a.speechSettings)
+	m.HandleFunc("PUT /api/speech", a.setSpeech)
+	m.HandleFunc("GET /api/speech/sample", a.speechSample)
 	m.HandleFunc("POST /api/files", a.uploadFile)
 	m.HandleFunc("GET /api/files", a.fileProxy)
 	m.HandleFunc("GET /api/files/{id}", a.fileProxy)

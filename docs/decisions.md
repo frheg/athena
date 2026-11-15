@@ -144,3 +144,20 @@ what seemed right, and any of them can be changed. Newest last.
     outside text" note) is a `<context>` block before the newest user message. The server then reads only the new
     end of a conversation instead of all of it every turn (reading a prompt is the slow part when the model's
     experts are in RAM).
+
+### Speech (later)
+
+56. **Speech plays in the browser first** (agreed), and later also from kratos itself to a Bluetooth speaker. Over
+    Bluetooth, the browser path plays wherever the phone or laptop sends its sound.
+57. **default** Text to speech is its own service, `speech`: Piper voices behind an OpenAI-compatible
+    `/v1/audio/speech`, so core works with any such server (`TTS_URL`). It is the one part in Python (Piper is
+    Python and GPL-3.0). The image holds three voices, checked by sha256 at build: `no_NO-talesyntese-medium`
+    (default Norwegian), `no_NO-nvcc-medium` (ten speakers) and `en_GB-cori-high` (default English). It picks
+    Norwegian or English from the text itself. It runs on the CPU (about 50 times faster than real time for the
+    medium voices) and needs no network.
+58. **default** Core turns the answer's markdown into speakable text (code blocks and link targets left out, list
+    items and table rows as sentences) and makes the audio a piece of whole sentences at a time
+    (`GET /api/messages/{id}/speech?part=n`, a short first piece), so playing starts at once and the next piece
+    loads while one plays. Voices and speed are one setting for all devices (Settings); "read new answers aloud"
+    is per device. A browser only plays sound after you have touched the page, so it can refuse to start reading
+    by itself; the answer's play button always works.

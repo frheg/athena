@@ -1,0 +1,8 @@
+# Piper voices baked into the image: file, sha256, URL (rhasspy/piper-voices at a fixed revision).
+# Add a line to add a voice; the id is the file name without .onnx, and its language is the part before the first _.
+no_NO-talesyntese-medium.onnx f5f33d4e2a67cbef7cc5bab6d4b773a815e6a5cb02438509ea9b7493696f539f https://huggingface.co/rhasspy/piper-voices/resolve/e9ab671f2a0e50a701b34361136ba3e6a3a9eb0c/no/no_NO/talesyntese/medium/no_NO-talesyntese-medium.onnx
+no_NO-talesyntese-medium.onnx.json 48a75caac2cd2515e85aa4bc3fbf6c2c5f3b663b811291ca0a71628a51b05865 https://huggingface.co/rhasspy/piper-voices/resolve/e9ab671f2a0e50a701b34361136ba3e6a3a9eb0c/no/no_NO/talesyntese/medium/no_NO-talesyntese-medium.onnx.json
+no_NO-nvcc-medium.onnx 3f51702946d9544898440a1a66906155661a9d680ee103130ff68f73360b512e https://huggingface.co/rhasspy/piper-voices/resolve/e9ab671f2a0e50a701b34361136ba3e6a3a9eb0c/no/no_NO/nvcc/medium/no_NO-nvcc-medium.onnx
+no_NO-nvcc-medium.onnx.json 98410e911e5a9076ac4677a79b08b20f98c54f550c4388e29978f6bafa32b83d https://huggingface.co/rhasspy/piper-voices/resolve/e9ab671f2a0e50a701b34361136ba3e6a3a9eb0c/no/no_NO/nvcc/medium/no_NO-nvcc-medium.onnx.json
+en_GB-cori-high.onnx 470b4dd634c98f8a4850d7626ffc3dfc90774628eeef6605a6dd8f88f30a5903 https://huggingface.co/rhasspy/piper-voices/resolve/e9ab671f2a0e50a701b34361136ba3e6a3a9eb0c/en/en_GB/cori/high/en_GB-cori-high.onnx
+en_GB-cori-high.onnx.json 9e7fb5b5671612c22f3c81cbe46c1ae87b031a4632bcb509e499dad6f1e2adec https://huggingface.co/rhasspy/piper-voices/resolve/e9ab671f2a0e50a701b34361136ba3e6a3a9eb0c/en/en_GB/cori/high/en_GB-cori-high.onnx.json

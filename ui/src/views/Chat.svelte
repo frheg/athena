@@ -10,6 +10,9 @@
   import ToolCall from './parts/ToolCall.svelte'
   import ApprovalCard from './parts/ApprovalCard.svelte'
   import Attachments from './parts/Attachments.svelte'
+  import { player, speak, stop as stopSpeech, toggleAuto } from '../lib/speech.svelte.js'
+
+  let canSpeak = $derived(!!app.status?.info?.speech)
 
   let { id = '' } = $props()
 
@@ -97,6 +100,7 @@
           break
         case 'done':
           live = null
+          if (player.auto && canSpeak && d?.message_id) speak(d.message_id)
           load(id)
           loadSessions()
           refreshStats()
@@ -396,6 +400,12 @@
             {#if m.content}<div class="bubble"><Answer text={m.content} /></div>{/if}
             {#if m.meta}
               <div class="msg-meta mono-sm">
+                {#if canSpeak}
+                  <button class="ghost icon-btn speak-btn" class:on={player.id === m.id} onclick={() => (player.id === m.id ? stopSpeech() : speak(m.id))}
+                    title={player.id === m.id ? t('Stop reading') : t('Read aloud')} aria-label={player.id === m.id ? t('Stop reading') : t('Read aloud')}>
+                    <Icon name={player.id === m.id && !player.loading ? 'stop' : 'speaker'} size={14} />
+                  </button>
+                {/if}
                 {#if m.meta.model}<span>{m.meta.model}</span>{/if}
                 <span class="num">{num(m.meta.tokens)} tok</span>
                 {#if m.meta.secs != null}<span class="num">{dur(m.meta.secs)}</span>{/if}
@@ -475,6 +485,11 @@
             </label>
           {:else if app.models.default}
             <span class="mono-sm">{app.models.default}</span>
+          {/if}
+          {#if canSpeak}
+            <button type="button" class="ghost icon-btn read-aloud" class:on={player.auto} onclick={toggleAuto} aria-pressed={player.auto}
+              title={player.auto ? t('Reading new answers aloud on this device. Press to stop.') : t('Read new answers aloud on this device')}
+              aria-label={t('Read answers aloud')}><Icon name="speaker" size={17} /></button>
           {/if}
           <span class="mono-sm hide-narrow">{t('Enter to send, Shift+Enter for a new line')}</span>
           {#if live}

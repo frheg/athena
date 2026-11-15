@@ -58,6 +58,8 @@ services:
       FILES_URL: http://files:8080
       FILES_TOKEN: ${TOKEN_FILES}
       VISION_MODELS: ${VISION_MODELS}
+      TTS_URL: http://speech:8080/v1
+      TTS_TOKEN: ${TOKEN_SPEECH}
       NOTIFY_URL: http://notify:8080
       NOTIFY_TOKEN: ${TOKEN_NOTIFY}
       REMINDERS_URL: http://mcp-notes:8080
@@ -134,6 +136,19 @@ services:
       MCP_TOKENS: core=${TOKEN_FILES}
     depends_on:
       postgres: { condition: service_healthy, required: false }
+
+  # text to speech (Piper, Python): answers read aloud in the browser
+  speech:
+    build: ../speech
+    image: athena-speech
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      TOKENS: core=${TOKEN_SPEECH}
+      DEFAULT_VOICES: ${SPEECH_VOICES:-no=no_NO-talesyntese-medium,en=en_GB-cori-high}
 
   notify:
     <<: *go

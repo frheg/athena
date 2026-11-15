@@ -1,0 +1,205 @@
+"""speech: text to speech for assistants, with Piper voices, behind an OpenAI-compatible API.
+
+    POST /v1/audio/speech   {"input": "...", "voice": "auto" | "<voice id>", "speaker": 0, "speed": 1.0,
+                             "voices": {"no": "<id>", "en": "<id>"}}  ->  audio/wav
+                            "auto" picks Norwegian or English from the text; "voices" overrides the defaults for that.
+                            A voice written "<id>:<n>" is speaker n of a voice with several.
+    GET  /v1/models         the voices: id, language, speakers
+    GET  /health, /ready
+
+Environment:
+    VOICES_DIR      where the voices are (<id>.onnx and <id>.onnx.json), default /voices
+    DEFAULT_VOICES  language=voice pairs for "auto", default no=no_NO-talesyntese-medium,en=en_GB-cori-high
+    TOKENS          caller=token pairs; a request must carry "Authorization: Bearer <token>". Empty = no check.
+    LISTEN          host:port, default 0.0.0.0:8080
+
+Python and the standard library only, besides Piper itself (GPL-3.0): one process, a thread per request, a lock per
+voice. Text is limited to 5000 characters a request; callers split longer text.
+"""
+
+import hmac
+import io
+import json
+import logging
+import os
+import re
+import sys
+import threading
+import wave
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import onnxruntime
+from piper import PiperVoice, SynthesisConfig
+
+onnxruntime.disable_telemetry_events()  # onnxruntime has usage telemetry; nothing here should phone home
+
+MAX_CHARS = 5000
+log = logging.getLogger("speech")
+
+
+def pairs(s):
+    out = {}
+    for p in (s or "").split(","):
+        if "=" in p:
+            k, v = p.split("=", 1)
+            if k.strip() and v.strip():
+                out[k.strip()] = v.strip()
+    return out
+
+
+VOICES_DIR = os.environ.get("VOICES_DIR", "/voices")
+DEFAULTS = pairs(os.environ.get("DEFAULT_VOICES", "no=no_NO-talesyntese-medium,en=en_GB-cori-high"))
+TOKENS = pairs(os.environ.get("TOKENS", ""))
+
+
+def available():
+    """The voices on disk: id -> language (the part before the first _ of the id, like no or en)."""
+    out = {}
+    for f in sorted(os.listdir(VOICES_DIR)):
+        if f.endswith(".onnx") and os.path.exists(os.path.join(VOICES_DIR, f + ".json")):
+            vid = f[: -len(".onnx")]
+            out[vid] = vid.split("_", 1)[0]
+    return out
+
+
+_voices, _locks, _load_lock = {}, {}, threading.Lock()
+
+
+def voice(vid):
+    with _load_lock:
+        if vid not in _voices:
+            _voices[vid] = PiperVoice.load(os.path.join(VOICES_DIR, vid + ".onnx"))
+            _locks[vid] = threading.Lock()
+        return _voices[vid], _locks[vid]
+
+
+NO_WORDS = set("og ikke jeg det er på til en et som med har for av deg du vi hva hvor kan skal vil blir var hun han "
+               "meg min mitt mine dette den dere de sin seg også men når fra her der nå bare veldig hei takk ja nei "
+               "god morgen kveld natt ha bra".split())
+EN_WORDS = set("the and is you to of in it that what for with this are be was have not your can will on at from "
+               "there here now just very which would about".split())
+
+
+def language(text):
+    """no or en, from letters and common words. Norwegian wins ties when æ, ø or å appear."""
+    words = re.findall(r"[a-zæøå]+", text.lower())
+    no = sum(w in NO_WORDS for w in words) + 3 * len(re.findall(r"[æøå]", text.lower()))
+    en = sum(w in EN_WORDS for w in words)
+    return "no" if no > en else "en"
+
+
+def synthesize(text, vid, speaker=None, speed=1.0):
+    v, lock = voice(vid)
+    cfg = SynthesisConfig(speaker_id=speaker if v.config.num_speakers > 1 else None, length_scale=1.0 / speed)
+    buf = io.BytesIO()
+    with lock, wave.open(buf, "wb") as w:
+        v.synthesize_wav(text, w, syn_config=cfg)
+    return buf.getvalue()
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "speech"
+    sys_version = ""
+
+    def log_message(self, format, *args):  # the base class's parameter name
+        log.info("%s %s", self.address_string(), format % args)
+
+    def send(self, code, body, ctype="application/json", headers=None):
+        if isinstance(body, (dict, list)):
+            body = json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def error(self, code, msg):
+        self.send(code, {"error": msg})
+
+    def allowed(self):
+        if not TOKENS:
+            return True
+        got = self.headers.get("Authorization", "").removeprefix("Bearer ")
+        return any(hmac.compare_digest(got, t) for t in TOKENS.values())
+
+    def do_GET(self):
+        if self.path == "/health":
+            return self.send(200, b"ok\n", "text/plain")
+        if self.path == "/ready":
+            return self.send(200, b"ready\n", "text/plain") if available() else self.error(503, "no voices in " + VOICES_DIR)
+        if not self.allowed():
+            return self.error(401, "unknown caller")
+        if self.path == "/v1/models":
+            data = []
+            for vid, lang in available().items():
+                with open(os.path.join(VOICES_DIR, vid + ".onnx.json"), encoding="utf-8") as f:
+                    cfg = json.load(f)
+                data.append({"id": vid, "object": "model", "language": lang, "speakers": cfg.get("num_speakers", 1),
+                             "default": DEFAULTS.get(lang) == vid})
+            return self.send(200, {"object": "list", "data": data, "defaults": DEFAULTS})
+        return self.error(404, "no such endpoint")
+
+    def do_POST(self):
+        if not self.allowed():
+            return self.error(401, "unknown caller")
+        if self.path != "/v1/audio/speech":
+            return self.error(404, "no such endpoint")
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+            if n > 64 * 1024:
+                return self.error(413, "the request is too large")
+            req = json.loads(self.rfile.read(n) or b"{}")
+        except (ValueError, json.JSONDecodeError):
+            return self.error(400, "bad JSON body")
+        text = str(req.get("input", "")).strip()
+        if not text:
+            return self.error(400, "input is empty")
+        if len(text) > MAX_CHARS:
+            return self.error(400, f"input is longer than {MAX_CHARS} characters: split it")
+        fmt = req.get("response_format", "wav")
+        if fmt not in ("wav", None):
+            return self.error(400, "only wav is supported")
+        voices = available()
+        vid = req.get("voice") or "auto"
+        lang = ""
+        if vid in ("auto", "no", "en"):
+            lang = language(text) if vid == "auto" else vid
+            chosen = {**DEFAULTS, **{k: v for k, v in (req.get("voices") or {}).items() if v.split(":")[0] in voices}}
+            vid = chosen.get(lang, "")
+        speaker = req.get("speaker")
+        if ":" in vid:  # "<voice>:<speaker>" picks one speaker of a voice with several
+            vid, speaker = vid.split(":", 1)
+        if vid not in voices:
+            return self.error(400, f"no such voice: {vid or 'none for ' + lang}")
+        try:
+            speed = min(max(float(req.get("speed", 1.0)), 0.5), 2.0)
+            speaker = int(speaker) if speaker is not None else None
+        except (TypeError, ValueError):
+            return self.error(400, "speed and speaker must be numbers")
+        try:
+            audio = synthesize(text, vid, speaker, speed)
+        except Exception as e:  # a voice that fails to load or speak
+            log.exception("synthesis failed")
+            return self.error(500, f"synthesis failed: {e}")
+        self.send(200, audio, "audio/wav", {"X-Voice": vid, "X-Language": lang or voices[vid]})
+
+
+def main():
+    logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='{"time":"%(asctime)s","level":"%(levelname)s","msg":"%(message)s"}')
+    if len(sys.argv) > 1 and sys.argv[1] == "health":  # the container's health check
+        import urllib.request
+        port = os.environ.get("LISTEN", "0.0.0.0:8080").rsplit(":", 1)[1]
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=3)
+        except Exception:
+            sys.exit(1)
+        return
+    host, port = os.environ.get("LISTEN", "0.0.0.0:8080").rsplit(":", 1)
+    log.info("voices: %s; defaults: %s; auth: %s", ", ".join(available()), DEFAULTS, bool(TOKENS))
+    ThreadingHTTPServer((host, int(port)), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()

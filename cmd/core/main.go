@@ -11,6 +11,7 @@
 //	POLICY_FILE         the permission policy (default /etc/athena/policy.yaml); missing = every tool denied
 //	MEMORY_URL, MEMORY_TOKEN   the memory service (optional)
 //	FILES_URL, FILES_TOKEN     the files service, for attachments (optional; without it the UI cannot attach)
+//	TTS_URL, TTS_TOKEN  a speech server for reading answers aloud (OpenAI-compatible, base URL ending in /v1; optional)
 //	VISION_MODELS       models that can see images, comma-separated (* = all); others get a note instead
 //	NOTIFY_URL, NOTIFY_TOKEN, NOTIFY_TO   the notify service for job results (optional; NOTIFY_TO default owner)
 //	REMINDERS_URL, REMINDERS_TOKEN        mcp-notes, whose due reminders core delivers every minute (optional)
@@ -47,6 +48,7 @@ import (
 	"github.com/frheg/athena/internal/notes"
 	"github.com/frheg/athena/internal/notify"
 	"github.com/frheg/athena/internal/probe"
+	"github.com/frheg/athena/internal/speech"
 	"github.com/frheg/athena/internal/store"
 	"github.com/frheg/athena/internal/toolbox"
 )
@@ -189,6 +191,10 @@ func run(log *slog.Logger) error {
 		}
 		e.Vision = func(model string) bool { return seeing["*"] || seeing[model] }
 	}
+	var tts *speech.Client
+	if u := env.Str("TTS_URL", ""); u != "" {
+		tts = &speech.Client{URL: u, Token: env.Str("TTS_TOKEN", "")}
+	}
 	var notifier engine.Notifier
 	if u := env.Str("NOTIFY_URL", ""); u != "" {
 		notifier = &notify.Client{URL: u, Token: env.Str("NOTIFY_TOKEN", ""), To: env.Str("NOTIFY_TO", "owner")}
@@ -223,9 +229,9 @@ func run(log *slog.Logger) error {
 	e.Recover(ctx)
 
 	ready := func(ctx context.Context) error { return st.DB.Ping(ctx) }
-	a := &api.API{E: e, Scheduler: sched, Memory: mem, Files: fc, Owner: env.Str("OWNER", "owner"), Token: env.Str("API_TOKEN", ""), Version: version, Ready: ready,
+	a := &api.API{E: e, Scheduler: sched, Memory: mem, Files: fc, Speech: tts, Owner: env.Str("OWNER", "owner"), Token: env.Str("API_TOKEN", ""), Version: version, Ready: ready,
 		Info: map[string]any{"model": model.Primary.Model, "fallback_model": model.Fallback.Model, "policy_file": pol.file,
-			"memory": mem != nil, "notify": notifier != nil, "files": fc != nil, "vision_models": env.Str("VISION_MODELS", "")}}
+			"memory": mem != nil, "notify": notifier != nil, "files": fc != nil, "speech": tts != nil, "vision_models": env.Str("VISION_MODELS", "")}}
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/", a.Handler())

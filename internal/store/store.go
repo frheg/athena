@@ -282,6 +282,23 @@ func (s *Store) Messages(ctx context.Context, sessionID string, limit int) ([]Me
 	})
 }
 
+// Message returns one message of the owner's conversations.
+func (s *Store) Message(ctx context.Context, owner string, id int64) (Message, error) {
+	var m Message
+	var calls, files []byte
+	err := s.DB.QueryRow(ctx, `SELECT m.id, m.turn_id, m.role, m.content, m.tool_calls, COALESCE(m.tool_call_id,''), COALESCE(m.name,''), m.files, m.created_at
+		FROM messages m JOIN sessions s ON s.id = m.session_id WHERE m.id = $1 AND s.owner = $2`, id, owner).Scan(
+		&m.ID, &m.TurnID, &m.Role, &m.Content, &calls, &m.ToolCallID, &m.Name, &files, &m.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return m, ErrNotFound
+	}
+	m.ToolCalls = calls
+	if len(files) > 0 {
+		_ = json.Unmarshal(files, &m.Files)
+	}
+	return m, err
+}
+
 // ---------- turns ----------
 
 // CreateTurn starts a turn in status running.

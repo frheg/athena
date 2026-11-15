@@ -43,6 +43,7 @@ and the rules. Edit it and core picks up the change within 30 seconds.
 | `memory` | what Athena remembers about you |
 | `notify` | mail out, to listed recipients only |
 | `files` | what you attach to a chat: text read out of documents, previews of images |
+| `speech` | answers read aloud (Piper voices, Norwegian and English; Python, and the image includes GPL-3.0 software) |
 | `mcp-cluster-read`, `mcp-cluster-act` | a Kubernetes cluster: look, and the listed actions |
 
 Each MCP server works with any MCP client, not only Athena.

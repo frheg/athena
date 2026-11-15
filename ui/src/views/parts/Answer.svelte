@@ -9,7 +9,7 @@
 
 <div class="md">{@html html}</div>
 {#if hasImages(text) && !images}
-  <button class="link small" onclick={() => (images = true)} title={t('Images load from other sites, which then learn that you opened them.')}>
+  <button class="ghost small" onclick={() => (images = true)} title={t('Images load from other sites, which then learn that you opened them.')}>
     {t('Load images')}
   </button>
 {/if}

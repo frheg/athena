@@ -107,3 +107,17 @@ what seemed right, and any of them can be changed. Newest last.
 44. **default** Images are pinned by tag and digest. The optional llama.cpp image is pinned by digest only (its
     tags are build numbers).
 45. **default** Neo4j is not used yet: it comes when a real use needs relations.
+
+### Models and the UI (later)
+
+46. **One model at a time** (agreed). Only one LLM runs on the GPU; a second big model next to a partly offloaded
+    one starves it of memory and CPU. So the model choice is global, not per conversation: the picker in the chat
+    sets the one model all of Athena uses (`PUT /api/models/active`, stored as a setting), and every model call
+    reads it, so a switch applies from the next step on. The model server swaps models; core never needs two.
+47. **default** The picker offers only the models of the endpoints in `MODEL_SWITCH_ENDPOINTS` (default
+    `primary`), so a fallback server is never chosen by hand. On kratos there is no fallback at all.
+48. **default** `GET /api/stats` gives the numbers the UI shows everywhere: turns, tokens, tool calls per day for
+    14 days, gate decisions, tool and model use for 7 days, waiting approvals, jobs, permissions, audit size.
+49. **default** The UI follows a warm, quiet style: neutral surfaces, one sage accent, mono uppercase labels for
+    data, a serif for headings (Geist, Geist Mono, Instrument Serif, served by Athena itself). No emoji; icons
+    are inline line drawings. Side rail on laptops, an icon rail on tablets, a tab bar with a More sheet on phones.

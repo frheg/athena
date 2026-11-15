@@ -564,3 +564,149 @@ func (s *Store) MarkRead(ctx context.Context, owner string, ids []int64) error {
 
 // Like escapes % and _ for ILIKE patterns.
 func Like(s string) string { return strings.NewReplacer(`%`, `\%`, `_`, `\_`).Replace(s) }
+
+// ---------- stats ----------
+
+// Stats is an overview of what Athena has done, for the UI.
+type Stats struct {
+	Sessions     int            `json:"sessions"`
+	Turns        int            `json:"turns"`
+	Turns24h     int            `json:"turns_24h"`
+	Failed7d     int            `json:"failed_7d"`
+	TokensIn7d   int64          `json:"tokens_in_7d"`
+	TokensOut7d  int64          `json:"tokens_out_7d"`
+	ToolCalls7d  int            `json:"tool_calls_7d"`
+	AvgTurnSec7d float64        `json:"avg_turn_seconds_7d"`
+	Waiting      int            `json:"approvals_waiting"`
+	Decisions7d  map[string]int `json:"decisions_7d"`
+	Days         []DayStat      `json:"days"`
+	Tools        []ToolStat     `json:"tools"`
+	Models       []ModelStat    `json:"models"`
+	Jobs         int            `json:"jobs"`
+	Unread       int            `json:"notifications_unread"`
+	Permissions  int            `json:"permissions"`
+	Audit        int64          `json:"audit_entries"`
+}
+
+// DayStat is one day of activity.
+type DayStat struct {
+	Day       string `json:"day"`
+	Turns     int    `json:"turns"`
+	ToolCalls int    `json:"tool_calls"`
+	Tokens    int64  `json:"tokens"`
+}
+
+// ToolStat is how a tool was used in the last 7 days.
+type ToolStat struct {
+	Tool   string  `json:"tool"`
+	Calls  int     `json:"calls"`
+	Errors int     `json:"errors"`
+	AvgMS  float64 `json:"avg_ms"`
+}
+
+// ModelStat is how a model was used in the last 7 days.
+type ModelStat struct {
+	Model     string  `json:"model"`
+	Turns     int     `json:"turns"`
+	TokensOut int64   `json:"tokens_out"`
+	AvgSec    float64 `json:"avg_seconds"`
+}
+
+// Stats collects the overview for owner, with days in zone.
+func (s *Store) Stats(ctx context.Context, owner string, zone string) (Stats, error) {
+	var st Stats
+	err := s.DB.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM sessions WHERE owner = $1 AND NOT archived),
+		(SELECT count(*) FROM turns WHERE owner = $1),
+		(SELECT count(*) FROM turns WHERE owner = $1 AND created_at > now() - interval '24 hours'),
+		(SELECT count(*) FROM turns WHERE owner = $1 AND status = 'failed' AND created_at > now() - interval '7 days'),
+		(SELECT COALESCE(sum(tokens_in), 0) FROM turns WHERE owner = $1 AND created_at > now() - interval '7 days'),
+		(SELECT COALESCE(sum(tokens_out), 0) FROM turns WHERE owner = $1 AND created_at > now() - interval '7 days'),
+		(SELECT count(*) FROM tool_calls c JOIN turns t ON t.id = c.turn_id WHERE t.owner = $1 AND c.created_at > now() - interval '7 days'),
+		(SELECT COALESCE(avg(extract(epoch FROM finished_at - created_at)), 0) FROM turns
+			WHERE owner = $1 AND status = 'done' AND created_at > now() - interval '7 days'),
+		(SELECT count(*) FROM approvals WHERE owner = $1 AND status = 'waiting'),
+		(SELECT count(*) FROM jobs WHERE owner = $1),
+		(SELECT count(*) FROM notifications WHERE owner = $1 AND NOT read),
+		(SELECT count(*) FROM permissions WHERE owner = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())),
+		(SELECT count(*) FROM audit WHERE owner = $1)`, owner).Scan(&st.Sessions, &st.Turns, &st.Turns24h, &st.Failed7d,
+		&st.TokensIn7d, &st.TokensOut7d, &st.ToolCalls7d, &st.AvgTurnSec7d, &st.Waiting, &st.Jobs, &st.Unread, &st.Permissions, &st.Audit)
+	if err != nil {
+		return st, err
+	}
+	st.Decisions7d = map[string]int{"allow": 0, "ask": 0, "deny": 0}
+	rows, err := s.DB.Query(ctx, `SELECT c.decision, count(*) FROM tool_calls c JOIN turns t ON t.id = c.turn_id
+		WHERE t.owner = $1 AND c.created_at > now() - interval '7 days' GROUP BY 1`, owner)
+	if err != nil {
+		return st, err
+	}
+	for rows.Next() {
+		var d string
+		var n int
+		if err := rows.Scan(&d, &n); err != nil {
+			rows.Close()
+			return st, err
+		}
+		st.Decisions7d[d] = n
+	}
+	rows.Close()
+	rows, err = s.DB.Query(ctx, `WITH days AS (
+			SELECT generate_series((now() AT TIME ZONE $2)::date - 13, (now() AT TIME ZONE $2)::date, interval '1 day')::date AS day)
+		SELECT to_char(d.day, 'YYYY-MM-DD'),
+			(SELECT count(*) FROM turns t WHERE t.owner = $1 AND (t.created_at AT TIME ZONE $2)::date = d.day),
+			(SELECT count(*) FROM tool_calls c JOIN turns t ON t.id = c.turn_id WHERE t.owner = $1 AND (c.created_at AT TIME ZONE $2)::date = d.day),
+			(SELECT COALESCE(sum(tokens_in + tokens_out), 0) FROM turns t WHERE t.owner = $1 AND (t.created_at AT TIME ZONE $2)::date = d.day)
+		FROM days d ORDER BY d.day`, owner, zone)
+	if err != nil {
+		return st, err
+	}
+	if st.Days, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (DayStat, error) {
+		var d DayStat
+		err := r.Scan(&d.Day, &d.Turns, &d.ToolCalls, &d.Tokens)
+		return d, err
+	}); err != nil {
+		return st, err
+	}
+	rows, err = s.DB.Query(ctx, `SELECT c.tool, count(*), count(*) FILTER (WHERE c.status = 'error'), COALESCE(avg(c.duration_ms) FILTER (WHERE c.status IN ('ok','error')), 0)
+		FROM tool_calls c JOIN turns t ON t.id = c.turn_id WHERE t.owner = $1 AND c.created_at > now() - interval '7 days'
+		GROUP BY 1 ORDER BY 2 DESC LIMIT 12`, owner)
+	if err != nil {
+		return st, err
+	}
+	if st.Tools, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (ToolStat, error) {
+		var x ToolStat
+		err := r.Scan(&x.Tool, &x.Calls, &x.Errors, &x.AvgMS)
+		return x, err
+	}); err != nil {
+		return st, err
+	}
+	rows, err = s.DB.Query(ctx, `SELECT model, count(*), COALESCE(sum(tokens_out), 0),
+			COALESCE(avg(extract(epoch FROM finished_at - created_at)) FILTER (WHERE status = 'done'), 0)
+		FROM turns WHERE owner = $1 AND model <> '' AND created_at > now() - interval '7 days' GROUP BY 1 ORDER BY 2 DESC`, owner)
+	if err != nil {
+		return st, err
+	}
+	st.Models, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (ModelStat, error) {
+		var x ModelStat
+		err := r.Scan(&x.Model, &x.Turns, &x.TokensOut, &x.AvgSec)
+		return x, err
+	})
+	return st, err
+}
+
+// Setting returns a setting ("" when it is not set).
+func (s *Store) Setting(ctx context.Context, key string) (string, error) {
+	var v string
+	err := s.DB.QueryRow(ctx, `SELECT value FROM settings WHERE key = $1`, key).Scan(&v)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return v, err
+}
+
+// SetSetting stores a setting.
+func (s *Store) SetSetting(ctx context.Context, key, value string) error {
+	_, err := s.DB.Exec(ctx, `INSERT INTO settings (key, value) VALUES ($1, $2)
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, key, value)
+	return err
+}

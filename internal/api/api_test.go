@@ -123,3 +123,19 @@ func TestChatOverHTTP(t *testing.T) {
 		t.Fatal("memory without a service", res.StatusCode)
 	}
 }
+
+func TestStatsQuery(t *testing.T) {
+	url := os.Getenv("ATHENA_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("ATHENA_TEST_DATABASE_URL is not set")
+	}
+	st, err := store.Open(context.Background(), url, func(string, ...any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Migrate(context.Background())
+	s, err := st.Stats(context.Background(), "nobody", "Europe/Oslo")
+	if err != nil || len(s.Days) != 14 || s.Decisions7d["allow"] != 0 {
+		t.Fatalf("%+v %v", s, err)
+	}
+}

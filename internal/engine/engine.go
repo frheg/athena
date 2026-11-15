@@ -37,6 +37,7 @@ type Recalled struct {
 type Engine struct {
 	Store   *store.Store
 	LLM     *llm.Client
+	Models  *llm.Catalog // the models a conversation may pick; nil: always the configured one
 	Tools   *toolbox.Box
 	Policy  func() *gate.Policy // the current policy (it can be reloaded)
 	Memory  Memory              // nil: no memory service
@@ -368,8 +369,9 @@ func (e *Engine) run(ctx context.Context, owner, sessionID, turnID, principal st
 			msgs = append(msgs, llm.Message{Role: "system", Content: "You have used all tool rounds for this turn. Answer now with what you have."})
 		}
 		rounds++
-		e.Hub.Publish(turnID, "status", map[string]any{"status": "thinking", "round": rounds})
-		res, err := e.LLM.Chat(ctx, msgs, offered, llm.Events{
+		client := e.client(ctx, turnID)
+		e.Hub.Publish(turnID, "status", map[string]any{"status": "thinking", "round": rounds, "model": client.Primary.Model})
+		res, err := client.Chat(ctx, msgs, offered, llm.Events{
 			Text: func(d string) { e.Hub.Publish(turnID, "text", map[string]string{"delta": d}) },
 			Waiting: func(reason string, d time.Duration) {
 				e.Hub.Publish(turnID, "waiting_model", map[string]any{"reason": reason, "seconds": int(d.Seconds())})
@@ -566,4 +568,23 @@ func (e *Engine) Answer(ctx context.Context, owner, approvalID, answer string, e
 		}
 	}()
 	return a, nil
+}
+
+// client returns the model client for a conversation: its chosen model when an endpoint serves it, else the default.
+// ActiveModel is the one model all of Athena uses ("" = the configured default). Only one LLM runs at a time, so
+// the choice is global, not per conversation; each model call reads it, so a switch applies from the next step on.
+const ActiveModel = "active_model"
+
+func (e *Engine) client(ctx context.Context, turnID string) *llm.Client {
+	model, _ := e.Store.Setting(ctx, ActiveModel)
+	if model == "" || e.Models == nil || model == e.LLM.Primary.Model {
+		return e.LLM
+	}
+	ep, ok := e.Models.Resolve(ctx, model)
+	if !ok {
+		e.Hub.Publish(turnID, "status", map[string]string{"status": "running",
+			"detail": fmt.Sprintf("the model %s is not available now; using %s", model, e.LLM.Primary.Model)})
+		return e.LLM
+	}
+	return e.LLM.With(ep)
 }

@@ -1,4 +1,4 @@
-// Shared state: the route, and counts the navigation shows (waiting approvals, unread notifications).
+// Shared state: the route, the numbers the navigation and pages show, and the models a chat can use.
 import { get, stream } from './api.js'
 
 export const app = $state({
@@ -7,6 +7,9 @@ export const app = $state({
   unread: 0,
   online: true,
   toast: '',
+  stats: null, // GET /api/stats
+  status: null, // GET /api/status
+  models: { models: [], default: '', active: '', switchable: false }, // active '' = the default
 })
 
 function parse(hash) {
@@ -47,13 +50,39 @@ export async function refreshCounts() {
   }
 }
 
+export async function refreshStats() {
+  try {
+    const [s, st] = await Promise.all([get('/stats'), get('/status')])
+    app.stats = s
+    app.status = st
+    app.online = true
+  } catch {
+    app.online = false
+  }
+}
+
+export async function refreshModels() {
+  try {
+    app.models = await get('/models')
+  } catch {
+    // keep the last list
+  }
+}
+
 export function startOwnerStream() {
   refreshCounts()
-  return stream('/events', (type, data) => {
+  refreshStats()
+  refreshModels()
+  const iv = setInterval(refreshStats, 30000)
+  const close = stream('/events', (type, data) => {
     refreshCounts()
     if (type === 'notification' && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
       new Notification(data.title, { body: (data.body || '').slice(0, 200) })
     }
     for (const fn of listeners) fn(type, data)
   }, { closeOnEnd: false })
+  return () => {
+    clearInterval(iv)
+    close()
+  }
 }

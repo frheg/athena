@@ -42,13 +42,19 @@ func testStore(t *testing.T) *store.Store {
 
 // fakeModel answers from a script: each step looks at the conversation and returns tool calls or text.
 type fakeModel struct {
-	mu    sync.Mutex
-	steps []func(msgs []llm.Message, tools []llm.Tool) map[string]any
-	seen  [][]llm.Message
+	mu     sync.Mutex
+	steps  []func(msgs []llm.Message, tools []llm.Tool) map[string]any
+	seen   [][]llm.Message
+	models []string
 }
 
 func (f *fakeModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/models") {
+		_, _ = w.Write([]byte(`{"data":[{"id":"fake"},{"id":"other"}]}`))
+		return
+	}
 	var body struct {
+		Model    string        `json:"model"`
 		Messages []llm.Message `json:"messages"`
 		Tools    []llm.Tool    `json:"tools"`
 	}
@@ -56,6 +62,7 @@ func (f *fakeModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(b, &body)
 	f.mu.Lock()
 	f.seen = append(f.seen, body.Messages)
+	f.models = append(f.models, body.Model)
 	if len(f.steps) == 0 {
 		f.mu.Unlock()
 		http.Error(w, "script ended", 500)
@@ -418,4 +425,23 @@ func TestReminderDelivery(t *testing.T) {
 	if len(notes) != 1 || notes[0].Title != "Reminder: Call the dentist" || n.count() != 1 {
 		t.Fatalf("%+v %v", notes, n.msgs)
 	}
+}
+
+func TestActiveModel(t *testing.T) {
+	r := newRig(t, func([]llm.Message, []llm.Tool) map[string]any { return say("one") },
+		func([]llm.Message, []llm.Tool) map[string]any { return say("two") })
+	r.e.Models = &llm.Catalog{Endpoints: []llm.NamedEndpoint{{Name: "primary", Endpoint: r.e.LLM.Primary}}}
+	ctx := context.Background()
+	sid := r.session(t)
+	_ = r.e.Store.SetSetting(ctx, ActiveModel, "other")
+	turn, _ := r.e.Start(ctx, r.owner, sid, "user", "hi")
+	r.wait(t, turn, "done")
+	_ = r.e.Store.SetSetting(ctx, ActiveModel, "gone") // no longer served: the default is used
+	turn, _ = r.e.Start(ctx, r.owner, sid, "user", "again")
+	r.wait(t, turn, "done")
+	if strings.Join(r.model.models, ",") != "other,fake" {
+		t.Fatalf("models used: %v", r.model.models)
+	}
+	_ = r.e.Store.SetSetting(ctx, ActiveModel, "")
+	_ = r.e.Store.SetSetting(ctx, ActiveModel, "")
 }

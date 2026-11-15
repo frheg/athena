@@ -19,7 +19,7 @@ function make(loadImages) {
         const safe = /^https?:\/\//i.test(href || '') ? href : ''
         if (!safe) return escape(text || 'image')
         if (loadImages) return `<img src="${escape(safe)}" alt="${escape(text || '')}" loading="lazy" referrerpolicy="no-referrer">`
-        return `<a href="${escape(safe)}" class="img-link">🖼 ${escape(text || 'image')}</a>`
+        return `<a href="${escape(safe)}" class="img-link">[image: ${escape(text || 'untitled')}]</a>`
       },
       html({ text }) {
         return escape(text) // raw HTML from the model is shown as text

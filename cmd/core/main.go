@@ -4,6 +4,8 @@
 //	LLM_URL, LLM_MODEL, LLM_KEY                       the model server (OpenAI-compatible, base URL ending in /v1)
 //	LLM_FALLBACK_URL, LLM_FALLBACK_MODEL, LLM_FALLBACK_KEY   used when the first does not answer (optional)
 //	LLM_TEMPERATURE, LLM_MAX_TOKENS, LLM_WAKE_DEADLINE  (default 0.3, 0 = server default, 3m)
+//	MODEL_SWITCH        let a conversation pick its model (default true)
+//	MODEL_SWITCH_ENDPOINTS  which endpoints the picker offers: primary, fallback or both (default primary)
 //	TOOL_SERVERS        name=url pairs of MCP servers, for example web=http://mcp-web:8080/mcp
 //	TOOL_TOKENS         name=token pairs: the token core sends to each server
 //	POLICY_FILE         the permission policy (default /etc/athena/policy.yaml); missing = every tool denied
@@ -27,6 +29,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -151,6 +154,20 @@ func run(log *slog.Logger) error {
 
 	e := &engine.Engine{Store: st, LLM: model, Tools: box, Policy: pol.cur.Load, Hub: engine.NewHub(30 * time.Minute), Log: log,
 		Zone: zone, Name: env.Str("ASSISTANT_NAME", "Athena"), History: env.Int("HISTORY_MESSAGES", 40)}
+	if env.Bool("MODEL_SWITCH", true) {
+		// Only the listed endpoints are offered for switching. The default leaves the fallback out: on a host where it
+		// runs in system RAM next to a partly offloaded primary, using both at once starves the primary of memory.
+		named := map[string]llm.Endpoint{"primary": model.Primary, "fallback": model.Fallback}
+		cat := &llm.Catalog{HTTP: &http.Client{Timeout: 10 * time.Second}}
+		for _, n := range strings.Split(env.Str("MODEL_SWITCH_ENDPOINTS", "primary"), ",") {
+			if ep, ok := named[strings.TrimSpace(n)]; ok && ep.URL != "" {
+				cat.Endpoints = append(cat.Endpoints, llm.NamedEndpoint{Name: strings.TrimSpace(n), Endpoint: ep})
+			}
+		}
+		if len(cat.Endpoints) > 0 {
+			e.Models = cat
+		}
+	}
 	var mem *memory.Client
 	if u := env.Str("MEMORY_URL", ""); u != "" {
 		mem = &memory.Client{URL: u, Token: env.Str("MEMORY_TOKEN", "")}

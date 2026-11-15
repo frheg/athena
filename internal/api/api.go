@@ -106,6 +106,9 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("POST /api/jobs/{id}/run", a.runJob)
 	m.HandleFunc("GET /api/tools", a.tools)
 	m.HandleFunc("GET /api/status", a.status)
+	m.HandleFunc("GET /api/models", a.models)
+	m.HandleFunc("PUT /api/models/active", a.setActive)
+	m.HandleFunc("GET /api/stats", a.stats)
 	m.HandleFunc("/api/memory/", a.memoryProxy)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such endpoint"})
@@ -620,4 +623,62 @@ func (a *API) memoryProxy(w http.ResponseWriter, r *http.Request) {
 		_ = a.E.Store.Audit(r.Context(), a.owner(r), "user", nil, nil, "memory."+strings.ToLower(r.Method), "", map[string]string{"path": rest})
 	}
 	writeJSON(w, code, out)
+}
+
+// models lists the models Athena can switch to, and the one it uses now ("active", "" = the default).
+func (a *API) models(w http.ResponseWriter, r *http.Request) {
+	def := a.E.LLM.Primary.Model
+	active, err := a.E.Store.Setting(r.Context(), engine.ActiveModel)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if a.E.Models == nil {
+		writeJSON(w, 200, map[string]any{"models": []any{}, "default": def, "active": active, "switchable": false})
+		return
+	}
+	list, errs := a.E.Models.Models(r.Context())
+	writeJSON(w, 200, map[string]any{"models": list, "default": def, "active": active, "switchable": true, "errors": errs})
+}
+
+// setActive switches the one model all of Athena uses ("" = back to the default). Only one LLM runs at a time, so
+// this is a global choice; the model server swaps models when the next call asks for the new one.
+func (a *API) setActive(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Model string `json:"model"`
+	}
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	model := strings.TrimSpace(in.Model)
+	if model == a.E.LLM.Primary.Model {
+		model = ""
+	}
+	if model != "" {
+		if a.E.Models == nil {
+			fail(w, bad("this Athena has one model; switching is off"))
+			return
+		}
+		if _, ok := a.E.Models.Resolve(r.Context(), model); !ok {
+			fail(w, bad("no configured model server offers %q", model))
+			return
+		}
+	}
+	if err := a.E.Store.SetSetting(r.Context(), engine.ActiveModel, model); err != nil {
+		fail(w, err)
+		return
+	}
+	_ = a.E.Store.Audit(r.Context(), a.owner(r), "user", nil, nil, "model.switch", "", map[string]string{"model": model})
+	writeJSON(w, 200, map[string]string{"active": model})
+}
+
+// stats is the overview of what Athena has done (the numbers on every page).
+func (a *API) stats(w http.ResponseWriter, r *http.Request) {
+	st, err := a.E.Store.Stats(r.Context(), a.owner(r), a.E.Zone.String())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, st)
 }

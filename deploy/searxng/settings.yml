@@ -1,0 +1,11 @@
+# SearXNG for Athena: JSON output on (mcp-web needs it), no rate limiter (only Athena calls it, inside the network).
+use_default_settings: true
+general:
+  instance_name: athena-search
+search:
+  safe_search: 0
+  formats: [html, json]
+server:
+  limiter: false
+  image_proxy: false
+  public_instance: false

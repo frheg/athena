@@ -1,0 +1,8 @@
+# What mcp-cluster-act may do. Anything not listed here does not exist for it.
+# Its service account must allow exactly this too (list and delete pods in these namespaces): two locks, not one.
+restart:
+  # a restart deletes the pods; their Deployment makes new ones. Nothing in the manifests changes.
+  - {name: web-app, namespace: apps, selector: app=web-app, note: "the example web app"}
+gpu:
+  consumers: [llm]   # GPU consumers Athena may acquire and release through the arbiter
+  max_ttl: 2h

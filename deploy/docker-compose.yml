@@ -1,0 +1,187 @@
+# Athena on plain Docker. From this folder:
+#   cp .env.example .env    (and fill it in)
+#   docker compose --profile deps --profile model up -d --build
+# Profiles:
+#   deps   Postgres, Qdrant and SearXNG. Leave it out when you have your own and point .env at them.
+#   model  llama.cpp for chat and for embeddings, with GGUF files from ./models. Leave it out for another server.
+# Only the gate is published, on GATE_PORT (default 127.0.0.1:8080). Every part is replaceable: each one only
+# knows the others by the URLs in .env.
+
+name: athena
+
+x-go: &go
+  restart: unless-stopped
+  read_only: true
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  build: &gobuild
+    context: ..
+    dockerfile: Dockerfile
+
+services:
+  gate:
+    image: nginxinc/nginx-unprivileged:1.27.3-alpine@sha256:9e7238f579a54582263a960d1b0094b4a3ecce641342eda3f8e2ff82b1703d2b
+    restart: unless-stopped
+    ports: ["${GATE_PORT:-127.0.0.1:8080}:8080"]
+    environment:
+      API_TOKEN: ${API_TOKEN:?set API_TOKEN in .env}
+      GATE_USER: ${GATE_USER:?set GATE_USER in .env}
+      GATE_PASSWORD: ${GATE_PASSWORD:?set GATE_PASSWORD in .env}
+    volumes:
+      - ./gate/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./gate/htpasswd.template:/etc/nginx/templates/htpasswd.template:ro
+    depends_on: [core, ui]
+
+  ui:
+    build: ../ui
+    image: athena-ui
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+
+  core:
+    <<: *go
+    build: { <<: *gobuild, target: core }
+    image: athena-core
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      LLM_URL: ${LLM_URL}
+      LLM_MODEL: ${LLM_MODEL}
+      LLM_KEY: ${LLM_KEY}
+      LLM_FALLBACK_URL: ${LLM_FALLBACK_URL}
+      LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL}
+      LLM_FALLBACK_KEY: ${LLM_FALLBACK_KEY}
+      TOOL_SERVERS: web=http://mcp-web:8080/mcp,sources=http://mcp-sources:8080/mcp,everyday=http://mcp-everyday:8080/mcp,memory=http://memory:8080/mcp,notes=http://mcp-notes:8080/mcp,notify=http://notify:8080/mcp
+      TOOL_TOKENS: web=${TOKEN_WEB},sources=${TOKEN_SOURCES},everyday=${TOKEN_EVERYDAY},memory=${TOKEN_MEMORY},notes=${TOKEN_NOTES},notify=${TOKEN_NOTIFY}
+      MEMORY_URL: http://memory:8080
+      MEMORY_TOKEN: ${TOKEN_MEMORY}
+      NOTIFY_URL: http://notify:8080
+      NOTIFY_TOKEN: ${TOKEN_NOTIFY}
+      REMINDERS_URL: http://mcp-notes:8080
+      REMINDERS_TOKEN: ${TOKEN_NOTES}
+      API_TOKEN: ${API_TOKEN}
+      POLICY_FILE: /etc/athena/policy.yaml
+      TIME_ZONE: ${TIME_ZONE:-UTC}
+      ASSISTANT_NAME: ${ASSISTANT_NAME:-Athena}
+    volumes:
+      - ../policy/policy.example.yaml:/etc/athena/policy.yaml:ro
+    depends_on:
+      postgres: { condition: service_healthy, required: false }
+
+  mcp-web:
+    <<: *go
+    build: { <<: *gobuild, target: mcp-web }
+    image: athena-mcp-web
+    environment:
+      SEARXNG_URL: ${SEARXNG_URL}
+      MCP_TOKENS: core=${TOKEN_WEB}
+
+  mcp-sources:
+    <<: *go
+    build: { <<: *gobuild, target: mcp-sources }
+    image: athena-mcp-sources
+    environment:
+      MCP_TOKENS: core=${TOKEN_SOURCES}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+
+  mcp-everyday:
+    <<: *go
+    build: { <<: *gobuild, target: mcp-everyday }
+    image: athena-mcp-everyday
+    environment:
+      MCP_TOKENS: core=${TOKEN_EVERYDAY}
+      ENTUR_CLIENT_NAME: ${ENTUR_CLIENT_NAME}
+      BRING_API_UID: ${BRING_API_UID}
+      BRING_API_KEY: ${BRING_API_KEY}
+
+  memory:
+    <<: *go
+    build: { <<: *gobuild, target: memory }
+    image: athena-memory
+    environment:
+      DATABASE_URL: ${MEMORY_DATABASE_URL}
+      QDRANT_URL: ${QDRANT_URL}
+      QDRANT_KEY: ${QDRANT_KEY}
+      QDRANT_COLLECTION: athena_memory
+      EMBED_URL: ${EMBED_URL}
+      EMBED_MODEL: ${EMBED_MODEL}
+      MCP_TOKENS: core=${TOKEN_MEMORY}
+    depends_on:
+      postgres: { condition: service_healthy, required: false }
+
+  mcp-notes:
+    <<: *go
+    build: { <<: *gobuild, target: mcp-notes }
+    image: athena-mcp-notes
+    environment:
+      DATABASE_URL: ${NOTES_DATABASE_URL}
+      TIME_ZONE: ${TIME_ZONE:-UTC}
+      MCP_TOKENS: core=${TOKEN_NOTES}
+    depends_on:
+      postgres: { condition: service_healthy, required: false }
+
+  notify:
+    <<: *go
+    build: { <<: *gobuild, target: notify }
+    image: athena-notify
+    environment:
+      RECIPIENTS: ${RECIPIENTS}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
+      MCP_TOKENS: core=${TOKEN_NOTIFY}
+
+  # ---------- deps ----------
+  postgres:
+    profiles: [deps]
+    image: postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: athena
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: athena
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U athena -d athena"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  qdrant:
+    profiles: [deps]
+    image: qdrant/qdrant:v1.20.0@sha256:9bfc89f9914fc14876a88c05270685921a55b8877b254a98bcc1cc2f0a424cd2
+    restart: unless-stopped
+    volumes: [qdrant:/qdrant/storage]
+
+  searxng:
+    profiles: [deps]
+    image: searxng/searxng:2026.10.29-c15647b5a@sha256:c4e8448495ef3b0175eb6c97a19c1ac7cc0a5c907d581ab3877f3cb430e81b86
+    restart: unless-stopped
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?set SEARXNG_SECRET in .env}
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+
+  # ---------- model ----------
+  # llama.cpp, pinned by digest (the "server" tag of 2026-11-15). CPU build; for a GPU use a -cuda image.
+  model:
+    profiles: [model]
+    image: ghcr.io/ggml-org/llama.cpp@sha256:89fe93c2ef53ea2d09ca9f53db8878a8f57bb6b143eb63c76a9c218fb583b392
+    restart: unless-stopped
+    command: ["-m", "/models/${MODEL_FILE:-model.gguf}", "--host", "0.0.0.0", "--port", "8080", "-c", "${MODEL_CONTEXT:-16384}", "--jinja"]
+    volumes: ["./models:/models:ro"]
+
+  embed:
+    profiles: [model]
+    image: ghcr.io/ggml-org/llama.cpp@sha256:89fe93c2ef53ea2d09ca9f53db8878a8f57bb6b143eb63c76a9c218fb583b392
+    restart: unless-stopped
+    command: ["-m", "/models/${EMBED_FILE:-embed.gguf}", "--host", "0.0.0.0", "--port", "8080", "--embedding", "--pooling", "mean"]
+    volumes: ["./models:/models:ro"]
+
+volumes:
+  postgres:
+  qdrant:

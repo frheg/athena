@@ -42,6 +42,7 @@ and the rules. Edit it and core picks up the change within 30 seconds.
 | `mcp-notes` | notes and reminders |
 | `memory` | what Athena remembers about you |
 | `notify` | mail out, to listed recipients only |
+| `files` | what you attach to a chat: text read out of documents, previews of images |
 | `mcp-cluster-read`, `mcp-cluster-act` | a Kubernetes cluster: look, and the listed actions |
 
 Each MCP server works with any MCP client, not only Athena.

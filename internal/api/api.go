@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/frheg/athena/internal/engine"
+	"github.com/frheg/athena/internal/files"
 	"github.com/frheg/athena/internal/gate"
 	"github.com/frheg/athena/internal/memory"
 	"github.com/frheg/athena/internal/store"
@@ -25,6 +27,7 @@ type API struct {
 	E         *engine.Engine
 	Scheduler *engine.Scheduler
 	Memory    *memory.Client // nil: no memory service
+	Files     *files.Client  // nil: no attachments
 	Owner     string         // the one user, for now
 	Token     string         // API_TOKEN: when set, every request needs "Authorization: Bearer <token>"
 	Version   string
@@ -51,7 +54,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 func fail(w http.ResponseWriter, err error) {
 	code := http.StatusInternalServerError
 	switch {
-	case errors.Is(err, store.ErrNotFound), errors.Is(err, memory.ErrNotFound):
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, memory.ErrNotFound), errors.Is(err, files.ErrNotFound):
 		code = http.StatusNotFound
 	case errors.Is(err, engine.ErrBusy):
 		code = http.StatusConflict
@@ -110,6 +113,11 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("PUT /api/models/active", a.setActive)
 	m.HandleFunc("GET /api/stats", a.stats)
 	m.HandleFunc("/api/memory/", a.memoryProxy)
+	m.HandleFunc("POST /api/files", a.uploadFile)
+	m.HandleFunc("GET /api/files", a.fileProxy)
+	m.HandleFunc("GET /api/files/{id}", a.fileProxy)
+	m.HandleFunc("GET /api/files/{id}/content", a.fileProxy)
+	m.HandleFunc("DELETE /api/files/{id}", a.fileProxy)
 	m.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such endpoint"})
 	})
@@ -216,7 +224,8 @@ func (a *API) patchSession(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) postMessage(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Text string `json:"text"`
+		Text  string   `json:"text"`
+		Files []string `json:"files"` // ids from POST /api/files
 	}
 	if err := decode(r, &in); err != nil {
 		fail(w, err)
@@ -226,7 +235,12 @@ func (a *API) postMessage(w http.ResponseWriter, r *http.Request) {
 		fail(w, bad("the message is longer than 100000 characters"))
 		return
 	}
-	turn, err := a.E.Start(r.Context(), a.owner(r), r.PathValue("id"), "user", in.Text)
+	att, err := a.attachments(r.Context(), a.owner(r), in.Files)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	turn, err := a.E.StartWith(r.Context(), a.owner(r), r.PathValue("id"), "user", in.Text, att)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) || errors.Is(err, engine.ErrBusy) {
 			fail(w, err)
@@ -634,10 +648,14 @@ func (a *API) models(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.E.Models == nil {
-		writeJSON(w, 200, map[string]any{"models": []any{}, "default": def, "active": active, "switchable": false})
+		writeJSON(w, 200, map[string]any{"models": []any{}, "default": def, "active": active, "switchable": false,
+			"default_vision": a.E.Vision != nil && a.E.Vision(def)})
 		return
 	}
 	list, errs := a.E.Models.Models(r.Context())
+	for i := range list {
+		list[i].Vision = a.E.Vision != nil && a.E.Vision(list[i].ID)
+	}
 	writeJSON(w, 200, map[string]any{"models": list, "default": def, "active": active, "switchable": true, "errors": errs})
 }
 
@@ -681,4 +699,134 @@ func (a *API) stats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, st)
+}
+
+// ---------- files ----------
+
+const maxFilesPerMessage = 10
+
+// attachments looks up the files a message names; each must belong to the user.
+func (a *API) attachments(ctx context.Context, owner string, ids []string) ([]store.Attachment, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if a.Files == nil {
+		return nil, bad("attachments are off: no file service is set up")
+	}
+	if len(ids) > maxFilesPerMessage {
+		return nil, bad("at most %d files per message", maxFilesPerMessage)
+	}
+	out := make([]store.Attachment, 0, len(ids))
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		f, err := a.Files.Get(ctx, owner, id)
+		if errors.Is(err, files.ErrNotFound) {
+			return nil, bad("no such file: %s", id)
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, store.Attachment{ID: f.ID, Name: f.Name, Mime: f.Mime, Kind: f.Kind, Size: f.Size, Chars: f.Chars,
+			Pages: f.Pages, Width: f.Width, Height: f.Height, Preview: f.Preview, Note: f.Note})
+	}
+	return out, nil
+}
+
+// uploadFile passes an upload to the file service. The body is the file itself; ?name= is its name.
+func (a *API) uploadFile(w http.ResponseWriter, r *http.Request) {
+	if a.Files == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "attachments are off: no file service is set up"})
+		return
+	}
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		fail(w, bad("the file needs a name (?name=)"))
+		return
+	}
+	// the file service enforces its own limit; this one only stops a runaway body early
+	body := http.MaxBytesReader(w, r.Body, 100<<20)
+	req, err := a.Files.Request(r.Context(), http.MethodPost, "/files", url.Values{"name": {name}}, body, a.owner(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	req.ContentLength = r.ContentLength
+	a.relay(w, req, func(code int, out json.RawMessage) {
+		if code == http.StatusCreated {
+			var f files.File
+			_ = json.Unmarshal(out, &f)
+			_ = a.E.Store.Audit(r.Context(), a.owner(r), "user", nil, nil, "file.upload", "", map[string]any{"id": f.ID, "kind": f.Kind, "bytes": f.Size})
+		}
+	})
+}
+
+// fileProxy passes the UI's file requests through for the signed-in user: list, one file, its bytes, delete.
+func (a *API) fileProxy(w http.ResponseWriter, r *http.Request) {
+	if a.Files == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "attachments are off: no file service is set up"})
+		return
+	}
+	path := "/files"
+	if id := r.PathValue("id"); id != "" {
+		path += "/" + url.PathEscape(id)
+		if strings.HasSuffix(r.URL.Path, "/content") {
+			path += "/content"
+		}
+	}
+	q := url.Values{}
+	for _, k := range []string{"limit", "preview"} {
+		if v := r.URL.Query().Get(k); v != "" {
+			q.Set(k, v)
+		}
+	}
+	req, err := a.Files.Request(r.Context(), r.Method, path, q, nil, a.owner(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if strings.HasSuffix(path, "/content") {
+		res, err := a.Files.Do(req)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		defer res.Body.Close()
+		// the file service sets a safe type: images inline, everything else as a download, sandboxed
+		for _, h := range []string{"Content-Type", "Content-Disposition", "Content-Length", "Cache-Control", "X-Content-Type-Options", "Content-Security-Policy"} {
+			if v := res.Header.Get(h); v != "" {
+				w.Header().Set(h, v)
+			}
+		}
+		w.WriteHeader(res.StatusCode)
+		_, _ = io.Copy(w, res.Body)
+		return
+	}
+	a.relay(w, req, func(code int, _ json.RawMessage) {
+		if r.Method == http.MethodDelete && code == 200 {
+			_ = a.E.Store.Audit(r.Context(), a.owner(r), "user", nil, nil, "file.delete", "", map[string]string{"id": r.PathValue("id")})
+		}
+	})
+}
+
+// relay sends req and writes the JSON answer back with its status; then calls after with them.
+func (a *API) relay(w http.ResponseWriter, req *http.Request, after func(code int, out json.RawMessage)) {
+	res, err := a.Files.Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "the file service: " + err.Error()})
+		return
+	}
+	defer res.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	if err != nil || !json.Valid(b) {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "the file service gave no usable answer"})
+		return
+	}
+	if after != nil {
+		after(res.StatusCode, b)
+	}
+	writeJSON(w, res.StatusCode, json.RawMessage(b))
 }

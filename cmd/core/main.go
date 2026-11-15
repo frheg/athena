@@ -10,6 +10,8 @@
 //	TOOL_TOKENS         name=token pairs: the token core sends to each server
 //	POLICY_FILE         the permission policy (default /etc/athena/policy.yaml); missing = every tool denied
 //	MEMORY_URL, MEMORY_TOKEN   the memory service (optional)
+//	FILES_URL, FILES_TOKEN     the files service, for attachments (optional; without it the UI cannot attach)
+//	VISION_MODELS       models that can see images, comma-separated (* = all); others get a note instead
 //	NOTIFY_URL, NOTIFY_TOKEN, NOTIFY_TO   the notify service for job results (optional; NOTIFY_TO default owner)
 //	REMINDERS_URL, REMINDERS_TOKEN        mcp-notes, whose due reminders core delivers every minute (optional)
 //	OWNER               the user's name inside Athena, default owner
@@ -38,6 +40,7 @@ import (
 	"github.com/frheg/athena/internal/api"
 	"github.com/frheg/athena/internal/engine"
 	"github.com/frheg/athena/internal/env"
+	"github.com/frheg/athena/internal/files"
 	"github.com/frheg/athena/internal/gate"
 	"github.com/frheg/athena/internal/llm"
 	"github.com/frheg/athena/internal/memory"
@@ -173,6 +176,19 @@ func run(log *slog.Logger) error {
 		mem = &memory.Client{URL: u, Token: env.Str("MEMORY_TOKEN", "")}
 		e.Memory = memoryRecall{mem}
 	}
+	var fc *files.Client
+	if u := env.Str("FILES_URL", ""); u != "" {
+		// uploads stream from the browser through core, so a slow phone connection needs a long timeout
+		fc = &files.Client{URL: u, Token: env.Str("FILES_TOKEN", ""), HTTP: &http.Client{Timeout: 10 * time.Minute}}
+		e.Files = fc
+	}
+	if v := strings.TrimSpace(env.Str("VISION_MODELS", "")); v != "" {
+		seeing := map[string]bool{}
+		for _, m := range strings.Split(v, ",") {
+			seeing[strings.TrimSpace(m)] = true
+		}
+		e.Vision = func(model string) bool { return seeing["*"] || seeing[model] }
+	}
 	var notifier engine.Notifier
 	if u := env.Str("NOTIFY_URL", ""); u != "" {
 		notifier = &notify.Client{URL: u, Token: env.Str("NOTIFY_TOKEN", ""), To: env.Str("NOTIFY_TO", "owner")}
@@ -207,9 +223,9 @@ func run(log *slog.Logger) error {
 	e.Recover(ctx)
 
 	ready := func(ctx context.Context) error { return st.DB.Ping(ctx) }
-	a := &api.API{E: e, Scheduler: sched, Memory: mem, Owner: env.Str("OWNER", "owner"), Token: env.Str("API_TOKEN", ""), Version: version, Ready: ready,
+	a := &api.API{E: e, Scheduler: sched, Memory: mem, Files: fc, Owner: env.Str("OWNER", "owner"), Token: env.Str("API_TOKEN", ""), Version: version, Ready: ready,
 		Info: map[string]any{"model": model.Primary.Model, "fallback_model": model.Fallback.Model, "policy_file": pol.file,
-			"memory": mem != nil, "notify": notifier != nil}}
+			"memory": mem != nil, "notify": notifier != nil, "files": fc != nil, "vision_models": env.Str("VISION_MODELS", "")}}
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/", a.Handler())

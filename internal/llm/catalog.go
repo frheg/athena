@@ -19,6 +19,7 @@ type Model struct {
 	Description string `json:"description,omitempty"`
 	Loaded      bool   `json:"loaded"` // known to be in memory now (llama-swap reports it); others may take a while to start
 	Default     bool   `json:"default"`
+	Vision      bool   `json:"vision,omitempty"` // it can see images (set by core from VISION_MODELS)
 }
 
 // NamedEndpoint is an endpoint the catalog asks for its models.

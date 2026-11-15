@@ -121,3 +121,21 @@ what seemed right, and any of them can be changed. Newest last.
 49. **default** The UI follows a warm, quiet style: neutral surfaces, one sage accent, mono uppercase labels for
     data, a serif for headings (Geist, Geist Mono, Instrument Serif, served by Athena itself). No emoji; icons
     are inline line drawings. Side rail on laptops, an icon rail on tablets, a tab bar with a More sheet on phones.
+
+### Attachments (later)
+
+50. **Attachments count as outside text** (agreed). A message with files taints its conversation, like a web page:
+    acts and messages ask again from then on. Their text reaches the model inside `<untrusted>` like tool results.
+51. **default** Files are their own service, `files`, with its own database, like memory and notes. At upload it
+    reads the text out once (plain text and code in UTF-8, UTF-16 or Latin-1; PDF text layers; Word, PowerPoint,
+    Excel and OpenDocument text) and makes a JPEG preview of an image, at most 1536 px on the long side and turned
+    upright by its EXIF orientation. The original is kept. Up to 20 MB a file (`MAX_FILE_MB`), 2 GB per user
+    (`QUOTA_MB`). A scanned PDF keeps only the text it has, with a note; HEIC and archives are stored, not read.
+52. **default** Only PNG, JPEG, GIF and WebP are ever shown in the page. Every other file, HTML and SVG included, is
+    sent as a download with `nosniff` and a sandbox CSP, so an upload can never run in Athena's origin.
+53. **default** What the model sees of attachments: the newest message's files up to 20 000 characters each and
+    60 000 together, older messages' files 4 000 each (the whole history goes to the model every round). The rest is
+    read with `files__read` and searched with `files__find`. The 4 newest images in the history are sent as images,
+    to models listed in `VISION_MODELS` only; others get the file's name and a note that they cannot see it.
+54. **default** At most 10 files per message. A file taken out of the message before sending is deleted. Files stay
+    when a conversation is archived; there is no file list in the UI yet.

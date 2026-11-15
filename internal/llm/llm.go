@@ -24,13 +24,39 @@ type Endpoint struct {
 	Key   string
 }
 
-// Message in the chat format.
+// Message in the chat format. A message with Parts (text and images) is sent with those as its content instead
+// of Content.
 type Message struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`
+	Parts      []Part     `json:"-"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	Name       string     `json:"name,omitempty"`
+}
+
+// Part is one piece of a message with several: text, or an image as a URL (a data: URL works everywhere).
+type Part struct {
+	Type     string    `json:"type"` // text or image_url
+	Text     string    `json:"text,omitempty"`
+	ImageURL *ImageURL `json:"image_url,omitempty"`
+}
+
+// ImageURL is where an image part is.
+type ImageURL struct {
+	URL string `json:"url"`
+}
+
+// MarshalJSON sends Parts as the content when there are any.
+func (m Message) MarshalJSON() ([]byte, error) {
+	type plain Message
+	if len(m.Parts) == 0 {
+		return json.Marshal(plain(m))
+	}
+	return json.Marshal(struct {
+		plain
+		Content []Part `json:"content"`
+	}{plain(m), m.Parts})
 }
 
 // ToolCall is a call the model asks for.

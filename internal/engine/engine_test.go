@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -45,6 +46,7 @@ type fakeModel struct {
 	mu     sync.Mutex
 	steps  []func(msgs []llm.Message, tools []llm.Tool) map[string]any
 	seen   [][]llm.Message
+	raw    [][]byte // the request bodies, as sent
 	models []string
 }
 
@@ -62,6 +64,7 @@ func (f *fakeModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(b, &body)
 	f.mu.Lock()
 	f.seen = append(f.seen, body.Messages)
+	f.raw = append(f.raw, b)
 	f.models = append(f.models, body.Model)
 	if len(f.steps) == 0 {
 		f.mu.Unlock()
@@ -444,4 +447,62 @@ func TestActiveModel(t *testing.T) {
 	}
 	_ = r.e.Store.SetSetting(ctx, ActiveModel, "")
 	_ = r.e.Store.SetSetting(ctx, ActiveModel, "")
+}
+
+type fakeFiles struct{ text map[string]string }
+
+func (f fakeFiles) Text(_ context.Context, _, id string) (string, error) { return f.text[id], nil }
+func (f fakeFiles) Preview(_ context.Context, _, id string) ([]byte, error) {
+	return []byte("JPEG-" + id), nil
+}
+
+func TestAttachments(t *testing.T) {
+	r := newRig(t,
+		func([]llm.Message, []llm.Tool) map[string]any { return say("I see a cat and your notes.") },
+		func([]llm.Message, []llm.Tool) map[string]any { return say("Still the notes.") })
+	long := strings.Repeat("a", 25000)
+	r.e.Files = fakeFiles{text: map[string]string{"doc": long}}
+	r.e.Vision = func(m string) bool { return m == "fake" }
+	ctx := context.Background()
+	sid := r.session(t)
+	files := []store.Attachment{
+		{ID: "img", Name: "cat.jpg", Mime: "image/jpeg", Kind: "image", Size: 2048, Width: 800, Height: 600, Preview: true},
+		{ID: "doc", Name: "notes.txt", Mime: "text/plain", Kind: "text", Size: 25000, Chars: 25000},
+		{ID: "bin", Name: "a.bin", Mime: "application/octet-stream", Kind: "binary", Size: 9, Note: "not a kind of file that can be read"},
+	}
+	turn, err := r.e.StartWith(ctx, r.owner, sid, "user", "", files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.wait(t, turn, "done")
+	body := string(r.model.raw[0])
+	for _, want := range []string{
+		`"type":"image_url"`,
+		"data:image/jpeg;base64," + base64.StdEncoding.EncodeToString([]byte("JPEG-img")),
+		`\u003cuntrusted source=\"attachment: notes.txt\"\u003e`,
+		"Cut here: 20000 of 25000 characters shown",
+		"a.bin",
+		"not a kind of file that can be read",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the model request lacks %q:\n%.3000s", want, body)
+		}
+	}
+	sess, _ := r.e.Store.Session(ctx, r.owner, sid)
+	if !sess.Tainted || sess.Title != "cat.jpg" {
+		t.Fatalf("attachments taint the conversation and name it: %+v", sess)
+	}
+	msgs, _ := r.e.Store.Messages(ctx, sid, 0)
+	if len(msgs[0].Files) != 3 || msgs[0].Files[0].Width != 800 {
+		t.Fatal("attachments are stored with the message", msgs[0].Files)
+	}
+
+	// a model that cannot see: the image becomes a note, and the older document is shown shorter
+	r.e.Vision = nil
+	turn, _ = r.e.Start(ctx, r.owner, sid, "user", "and now?")
+	r.wait(t, turn, "done")
+	body = string(r.model.raw[1])
+	if strings.Contains(body, "image_url") || !strings.Contains(body, "cannot see images") || !strings.Contains(body, "Cut here: 4000 of 25000") {
+		t.Fatalf("%.3000s", body)
+	}
 }

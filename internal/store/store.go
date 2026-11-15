@@ -61,7 +61,23 @@ type Message struct {
 	ToolCalls  json.RawMessage `json:"tool_calls,omitempty"`
 	ToolCallID string          `json:"tool_call_id,omitempty"`
 	Name       string          `json:"name,omitempty"`
+	Files      []Attachment    `json:"files,omitempty"`
 	CreatedAt  time.Time       `json:"created_at"`
+}
+
+// Attachment is a file attached to a user message, as the files service described it at upload.
+type Attachment struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Mime    string `json:"mime"`
+	Kind    string `json:"kind"` // image, text, document, binary
+	Size    int64  `json:"size"`
+	Chars   int    `json:"chars,omitempty"`
+	Pages   int    `json:"pages,omitempty"`
+	Width   int    `json:"width,omitempty"`
+	Height  int    `json:"height,omitempty"`
+	Preview bool   `json:"preview,omitempty"`
+	Note    string `json:"note,omitempty"`
 }
 
 // Turn is one answer to a user message (or a job run).
@@ -222,13 +238,17 @@ func (s *Store) Taint(ctx context.Context, id string) error {
 // AddMessage appends a message and touches the session.
 func (s *Store) AddMessage(ctx context.Context, sessionID string, turnID *string, m Message) (int64, error) {
 	var id int64
-	var calls any
+	var calls, files any
 	if len(m.ToolCalls) > 0 {
 		calls = []byte(m.ToolCalls)
 	}
+	if len(m.Files) > 0 {
+		b, _ := json.Marshal(m.Files)
+		files = b
+	}
 	err := pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `INSERT INTO messages (session_id, turn_id, role, content, tool_calls, tool_call_id, name)
-			VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,'')) RETURNING id`, sessionID, turnID, m.Role, m.Content, calls, m.ToolCallID, m.Name).Scan(&id); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO messages (session_id, turn_id, role, content, tool_calls, tool_call_id, name, files)
+			VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,''),$8) RETURNING id`, sessionID, turnID, m.Role, m.Content, calls, m.ToolCallID, m.Name, files).Scan(&id); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `UPDATE sessions SET updated_at = now() WHERE id = $1`, sessionID)
@@ -239,10 +259,10 @@ func (s *Store) AddMessage(ctx context.Context, sessionID string, turnID *string
 
 // Messages returns a conversation's messages in order (the newest `limit`, 0 = all).
 func (s *Store) Messages(ctx context.Context, sessionID string, limit int) ([]Message, error) {
-	q := `SELECT id, turn_id, role, content, tool_calls, COALESCE(tool_call_id,''), COALESCE(name,''), created_at FROM messages WHERE session_id = $1 ORDER BY id`
+	q := `SELECT id, turn_id, role, content, tool_calls, COALESCE(tool_call_id,''), COALESCE(name,''), files, created_at FROM messages WHERE session_id = $1 ORDER BY id`
 	args := []any{sessionID}
 	if limit > 0 {
-		q = `SELECT * FROM (SELECT id, turn_id, role, content, tool_calls, COALESCE(tool_call_id,''), COALESCE(name,''), created_at FROM messages
+		q = `SELECT * FROM (SELECT id, turn_id, role, content, tool_calls, COALESCE(tool_call_id,''), COALESCE(name,''), files, created_at FROM messages
 			WHERE session_id = $1 ORDER BY id DESC LIMIT $2) x ORDER BY id`
 		args = append(args, limit)
 	}
@@ -252,9 +272,12 @@ func (s *Store) Messages(ctx context.Context, sessionID string, limit int) ([]Me
 	}
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Message, error) {
 		var m Message
-		var calls []byte
-		err := r.Scan(&m.ID, &m.TurnID, &m.Role, &m.Content, &calls, &m.ToolCallID, &m.Name, &m.CreatedAt)
+		var calls, files []byte
+		err := r.Scan(&m.ID, &m.TurnID, &m.Role, &m.Content, &calls, &m.ToolCallID, &m.Name, &files, &m.CreatedAt)
 		m.ToolCalls = calls
+		if len(files) > 0 {
+			_ = json.Unmarshal(files, &m.Files)
+		}
 		return m, err
 	})
 }

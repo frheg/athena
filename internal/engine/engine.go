@@ -35,12 +35,15 @@ type Recalled struct {
 
 // Engine runs turns.
 type Engine struct {
-	Store   *store.Store
-	LLM     *llm.Client
-	Models  *llm.Catalog // the models a conversation may pick; nil: always the configured one
-	Tools   *toolbox.Box
-	Policy  func() *gate.Policy // the current policy (it can be reloaded)
-	Memory  Memory              // nil: no memory service
+	Store  *store.Store
+	LLM    *llm.Client
+	Models *llm.Catalog // the models a conversation may pick; nil: always the configured one
+	Tools  *toolbox.Box
+	Policy func() *gate.Policy // the current policy (it can be reloaded)
+	Memory Memory              // nil: no memory service
+	Files  Files               // nil: attachments are named, not read
+	// Vision reports whether a model can see images (nil: none can). Images go to the models it names only.
+	Vision  func(model string) bool
 	Hub     *Hub
 	Log     *slog.Logger
 	Zone    *time.Location
@@ -80,11 +83,17 @@ func (e *Engine) audit(ctx context.Context, owner, principal, session, turn, eve
 
 // Start adds the user's message and starts a turn in the background. It returns the turn id at once.
 func (e *Engine) Start(ctx context.Context, owner, sessionID, principal, text string) (string, error) {
+	return e.StartWith(ctx, owner, sessionID, principal, text, nil)
+}
+
+// StartWith is Start with files attached to the message. Attached files are text from outside (a document can say
+// anything), so they taint the conversation like a web page does.
+func (e *Engine) StartWith(ctx context.Context, owner, sessionID, principal, text string, files []store.Attachment) (string, error) {
 	sess, err := e.Store.Session(ctx, owner, sessionID)
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(text) == "" && len(files) == 0 {
 		return "", errors.New("the message is empty")
 	}
 	turns, err := e.Store.Turns(ctx, sess.ID)
@@ -105,17 +114,30 @@ func (e *Engine) Start(ctx context.Context, owner, sessionID, principal, text st
 	if err := e.Store.CreateTurn(ctx, turnID, sess.ID, owner, principal); err != nil {
 		return "", err
 	}
-	if _, err := e.Store.AddMessage(ctx, sess.ID, &turnID, store.Message{Role: "user", Content: text}); err != nil {
+	if _, err := e.Store.AddMessage(ctx, sess.ID, &turnID, store.Message{Role: "user", Content: text, Files: files}); err != nil {
 		return "", err
 	}
 	if sess.Title == "" {
 		title := strings.Join(strings.Fields(text), " ")
+		if title == "" {
+			title = files[0].Name
+		}
 		if r := []rune(title); len(r) > 60 {
 			title = string(r[:57]) + "..."
 		}
 		_ = e.Store.UpdateSession(ctx, owner, sess.ID, &title, false)
 	}
-	e.audit(ctx, owner, principal, sess.ID, turnID, "turn.start", "", map[string]any{"chars": len(text)})
+	e.audit(ctx, owner, principal, sess.ID, turnID, "turn.start", "", map[string]any{"chars": len(text), "files": len(files)})
+	if len(files) > 0 {
+		if !sess.Tainted {
+			_ = e.Store.Taint(ctx, sess.ID)
+		}
+		names := make([]string, len(files))
+		for i, f := range files {
+			names[i] = f.Name
+		}
+		e.Hub.Publish(turnID, "tainted", map[string]string{"by": "attachment: " + strings.Join(names, ", ")})
+	}
 	e.spawn(owner, sess.ID, turnID, principal)
 	return turnID, nil
 }
@@ -234,7 +256,8 @@ func (e *Engine) systemPrompt(recalled []Recalled, sess store.Session) string {
 	return b.String()
 }
 
-func (e *Engine) history(ctx context.Context, sessionID string) ([]llm.Message, string, error) {
+// history is the conversation as the model gets it. vision: the model sees images.
+func (e *Engine) history(ctx context.Context, owner, sessionID string, vision bool) ([]llm.Message, string, error) {
 	n := e.History
 	if n <= 0 {
 		n = 40
@@ -253,10 +276,25 @@ func (e *Engine) history(ctx context.Context, sessionID string) ([]llm.Message, 
 			answered[m.ToolCallID] = true
 		}
 	}
+	// attachments are built newest first, so the newest images are the ones sent as images
+	attached := map[int]llm.Message{}
+	images, newest := imagesInPrompt, true
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != "user" {
+			continue
+		}
+		if len(msgs[i].Files) > 0 {
+			attached[i] = e.withFiles(ctx, owner, msgs[i], vision, newest, &images)
+		}
+		newest = false
+	}
 	out := make([]llm.Message, 0, len(msgs))
 	lastUser := ""
-	for _, m := range msgs {
+	for i, m := range msgs {
 		lm := llm.Message{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID, Name: m.Name}
+		if a, ok := attached[i]; ok {
+			lm = a
+		}
 		if len(m.ToolCalls) > 0 {
 			_ = json.Unmarshal(m.ToolCalls, &lm.ToolCalls)
 		}
@@ -336,7 +374,9 @@ func (e *Engine) run(ctx context.Context, owner, sessionID, turnID, principal st
 			e.fail(owner, principal, sessionID, turnID, rounds, err)
 			return
 		}
-		hist, lastUser, err := e.history(ctx, sessionID)
+		client := e.client(ctx, turnID)
+		vision := e.Vision != nil && e.Vision(client.Primary.Model)
+		hist, lastUser, err := e.history(ctx, owner, sessionID, vision)
 		if err != nil {
 			e.fail(owner, principal, sessionID, turnID, rounds, err)
 			return
@@ -369,7 +409,6 @@ func (e *Engine) run(ctx context.Context, owner, sessionID, turnID, principal st
 			msgs = append(msgs, llm.Message{Role: "system", Content: "You have used all tool rounds for this turn. Answer now with what you have."})
 		}
 		rounds++
-		client := e.client(ctx, turnID)
 		e.Hub.Publish(turnID, "status", map[string]any{"status": "thinking", "round": rounds, "model": client.Primary.Model})
 		res, err := client.Chat(ctx, msgs, offered, llm.Events{
 			Text: func(d string) { e.Hub.Publish(turnID, "text", map[string]string{"delta": d}) },

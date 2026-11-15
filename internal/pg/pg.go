@@ -43,7 +43,18 @@ func Open(ctx context.Context, url string, maxConns int32, log func(string, ...a
 // Migrate applies the *.sql files in files (sorted by name) that have not run yet, each in a transaction, and
 // records them in table.
 func Migrate(ctx context.Context, db *pgxpool.Pool, files fs.FS, table string) error {
-	if _, err := db.Exec(ctx, `CREATE TABLE IF NOT EXISTS `+pgx.Identifier{table}.Sanitize()+` (name text PRIMARY KEY, at timestamptz NOT NULL DEFAULT now())`); err != nil {
+	h := fnv.New32a()
+	h.Write([]byte(table))
+	lock := int64(h.Sum32())
+	tbl := pgx.Identifier{table}.Sanitize()
+	// under the lock too: two first starts at once would both create the table, and one would fail
+	if err := pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, lock); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `CREATE TABLE IF NOT EXISTS `+tbl+` (name text PRIMARY KEY, at timestamptz NOT NULL DEFAULT now())`)
+		return err
+	}); err != nil {
 		return err
 	}
 	names, err := fs.Glob(files, "*.sql")
@@ -51,10 +62,6 @@ func Migrate(ctx context.Context, db *pgxpool.Pool, files fs.FS, table string) e
 		return err
 	}
 	sort.Strings(names)
-	h := fnv.New32a()
-	h.Write([]byte(table))
-	lock := int64(h.Sum32())
-	tbl := pgx.Identifier{table}.Sanitize()
 	for _, n := range names {
 		sql, err := fs.ReadFile(files, n)
 		if err != nil {

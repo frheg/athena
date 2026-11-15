@@ -6,11 +6,11 @@ set -eu
 reg=${1:?registry, for example registry.example:5000}
 ver=${2:?version, for example 0.1.0}
 cd "$(dirname "$0")/.."
-for t in core mcp-web mcp-sources mcp-everyday mcp-notes mcp-cluster-read mcp-cluster-act memory notify; do
+for t in core mcp-web mcp-sources mcp-everyday mcp-notes mcp-cluster-read mcp-cluster-act memory notify files; do
   docker build -q --build-arg VERSION="$ver" --target "$t" -t "athena-$t:$ver" . >/dev/null
 done
 docker build -q -t "athena-ui:$ver" ui >/dev/null
-for t in core mcp-web mcp-sources mcp-everyday mcp-notes mcp-cluster-read mcp-cluster-act memory notify ui; do
+for t in core mcp-web mcp-sources mcp-everyday mcp-notes mcp-cluster-read mcp-cluster-act memory notify files ui; do
   skopeo --insecure-policy copy -q --dest-tls-verify=false "docker-daemon:athena-$t:$ver" "docker://$reg/athena-$t:$ver"
   d=$(skopeo inspect --tls-verify=false --format '{{.Digest}}' "docker://$reg/athena-$t:$ver")
   echo "athena-$t $ver $d"

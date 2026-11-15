@@ -62,3 +62,11 @@ export const classHelp = {
   communicate: t('Sends something out of Athena, for example a mail.'),
   remember: t('Stores a fact about you. You can see and edit it under Memory.'),
 }
+
+// 2048 -> "2 KB", 3500000 -> "3.3 MB"
+export function bytes(n) {
+  if (!n) return '0 B'
+  if (n >= 1 << 20) return (n / (1 << 20)).toFixed(n >= 10 * (1 << 20) ? 0 : 1) + ' MB'
+  if (n >= 1 << 10) return Math.round(n / (1 << 10)) + ' KB'
+  return n + ' B'
+}

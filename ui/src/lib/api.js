@@ -59,3 +59,25 @@ export function stream(path, on, { closeOnEnd = true } = {}) {
   }
   return () => es.close()
 }
+
+// upload sends one file to the file store and reports progress (0 to 1). It answers with what the store read from
+// the file. XMLHttpRequest, because fetch cannot report upload progress.
+export function upload(file, onprogress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', 'api/files?name=' + encodeURIComponent(file.name || 'pasted'))
+    xhr.upload.onprogress = (e) => e.lengthComputable && onprogress && onprogress(e.loaded / e.total)
+    xhr.onload = () => {
+      let data = null
+      try {
+        data = JSON.parse(xhr.responseText)
+      } catch {
+        // not JSON
+      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data)
+      else reject(new ApiError(xhr.status, (data && data.error) || xhr.statusText || 'upload failed'))
+    }
+    xhr.onerror = () => reject(new ApiError(0, 'Athena does not answer (network)'))
+    xhr.send(file)
+  })
+}

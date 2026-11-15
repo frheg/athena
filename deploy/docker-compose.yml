@@ -51,10 +51,13 @@ services:
       LLM_FALLBACK_URL: ${LLM_FALLBACK_URL}
       LLM_FALLBACK_MODEL: ${LLM_FALLBACK_MODEL}
       LLM_FALLBACK_KEY: ${LLM_FALLBACK_KEY}
-      TOOL_SERVERS: web=http://mcp-web:8080/mcp,sources=http://mcp-sources:8080/mcp,everyday=http://mcp-everyday:8080/mcp,memory=http://memory:8080/mcp,notes=http://mcp-notes:8080/mcp,notify=http://notify:8080/mcp
-      TOOL_TOKENS: web=${TOKEN_WEB},sources=${TOKEN_SOURCES},everyday=${TOKEN_EVERYDAY},memory=${TOKEN_MEMORY},notes=${TOKEN_NOTES},notify=${TOKEN_NOTIFY}
+      TOOL_SERVERS: web=http://mcp-web:8080/mcp,sources=http://mcp-sources:8080/mcp,everyday=http://mcp-everyday:8080/mcp,memory=http://memory:8080/mcp,notes=http://mcp-notes:8080/mcp,notify=http://notify:8080/mcp,files=http://files:8080/mcp
+      TOOL_TOKENS: web=${TOKEN_WEB},sources=${TOKEN_SOURCES},everyday=${TOKEN_EVERYDAY},memory=${TOKEN_MEMORY},notes=${TOKEN_NOTES},notify=${TOKEN_NOTIFY},files=${TOKEN_FILES}
       MEMORY_URL: http://memory:8080
       MEMORY_TOKEN: ${TOKEN_MEMORY}
+      FILES_URL: http://files:8080
+      FILES_TOKEN: ${TOKEN_FILES}
+      VISION_MODELS: ${VISION_MODELS}
       NOTIFY_URL: http://notify:8080
       NOTIFY_TOKEN: ${TOKEN_NOTIFY}
       REMINDERS_URL: http://mcp-notes:8080
@@ -117,6 +120,18 @@ services:
       DATABASE_URL: ${NOTES_DATABASE_URL}
       TIME_ZONE: ${TIME_ZONE:-UTC}
       MCP_TOKENS: core=${TOKEN_NOTES}
+    depends_on:
+      postgres: { condition: service_healthy, required: false }
+
+  files:
+    <<: *go
+    build: { <<: *gobuild, target: files }
+    image: athena-files
+    environment:
+      DATABASE_URL: ${FILES_DATABASE_URL}
+      MAX_FILE_MB: ${MAX_FILE_MB:-20}
+      QUOTA_MB: ${FILES_QUOTA_MB:-2048}
+      MCP_TOKENS: core=${TOKEN_FILES}
     depends_on:
       postgres: { condition: service_healthy, required: false }
 

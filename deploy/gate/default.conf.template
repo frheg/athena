@@ -9,6 +9,15 @@ server {
     auth_basic "Athena";
     auth_basic_user_file /etc/nginx/conf.d/htpasswd;
 
+    # uploads: the file service has its own limit (MAX_FILE_MB, default 20)
+    location = /api/files {
+        client_max_body_size 25m;
+        proxy_pass http://core:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Authorization "Bearer ${API_TOKEN}";
+        proxy_set_header Host $host;
+        proxy_request_buffering off;
+    }
     location /api/ {
         proxy_pass http://core:8080;
         proxy_http_version 1.1;

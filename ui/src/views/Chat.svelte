@@ -1,14 +1,15 @@
 <script>
   import { untrack } from 'svelte'
-  import { get, post, patch, put, stream } from '../lib/api.js'
+  import { get, post, patch, put, del, stream, upload } from '../lib/api.js'
   import { t } from '../lib/i18n.js'
-  import { when, num, dur } from '../lib/format.js'
+  import { when, num, dur, bytes } from '../lib/format.js'
   import { app, go, toast, onOwnerEvent, refreshStats, refreshModels } from '../lib/state.svelte.js'
   import Icon from '../lib/Icon.svelte'
   import Kpi from '../lib/Kpi.svelte'
   import Answer from './parts/Answer.svelte'
   import ToolCall from './parts/ToolCall.svelte'
   import ApprovalCard from './parts/ApprovalCard.svelte'
+  import Attachments from './parts/Attachments.svelte'
 
   let { id = '' } = $props()
 
@@ -22,6 +23,12 @@
   let scroller
   let stop = null
   let reloadTimer
+  let picker
+  // files on their way into the next message: {key, name, size, progress, file (when stored), error}
+  let pending = $state([])
+  let dragging = $state(false)
+  const MAX_FILES = 10
+  const MAX_MB = 20
 
   async function loadSessions() {
     try {
@@ -109,11 +116,68 @@
     })
   }
 
+  function addFiles(list) {
+    for (const f of list) {
+      if (pending.length >= MAX_FILES) {
+        toast(t('At most {n} files per message.', { n: MAX_FILES }))
+        break
+      }
+      if (f.size > MAX_MB * 1024 * 1024) {
+        toast(t('{f} is larger than {n} MB.', { f: f.name, n: MAX_MB }))
+        continue
+      }
+      pending.push({ key: crypto.randomUUID(), name: f.name || t('pasted image'), size: f.size, progress: 0, file: null, error: '' })
+      const item = pending[pending.length - 1]
+      upload(f, (x) => (item.progress = x))
+        .then((stored) => (item.file = stored))
+        .catch((e) => (item.error = e.message))
+    }
+  }
+
+  // a file taken out before sending is deleted from the store too
+  function removeFile(key) {
+    const p = pending.find((x) => x.key === key)
+    pending = pending.filter((x) => x.key !== key)
+    if (p?.file) del('/files/' + p.file.id).catch(() => {})
+  }
+
+  // a screenshot pasted into the box becomes an attachment
+  function paste(e) {
+    const list = [...(e.clipboardData?.files || [])]
+    if (list.length) {
+      e.preventDefault()
+      addFiles(list)
+    }
+  }
+
+  function drop(e) {
+    e.preventDefault()
+    dragging = false
+    if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files)
+  }
+
+  let uploading = $derived(pending.some((p) => !p.file && !p.error))
+  let ready = $derived(pending.filter((p) => p.file).map((p) => p.file.id))
+
   async function send(text = input.trim()) {
-    if (!text || sending) return
+    if ((!text && !ready.length) || sending || uploading) return
     sending = true
+    const files = ready
     try {
-      if (!id) {
+      if (files.length) {
+        // with files, a new conversation is made first and the message goes to it like any other
+        const sid = id || (await post('/sessions', {})).session.id
+        const r = await post('/sessions/' + sid + '/messages', { text, files })
+        input = ''
+        pending = []
+        if (sid !== id) {
+          await loadSessions()
+          go('chat', sid)
+        } else {
+          await load(id)
+        }
+        follow(r.turn_id)
+      } else if (!id) {
         const r = await post('/sessions', { text })
         input = ''
         await loadSessions()
@@ -223,7 +287,10 @@
 
   let busy = $derived(live && live.status !== 'waiting')
   let current = $derived(app.models.active || '')
-  let currentLoaded = $derived((app.models.models.find((m) => m.id === (current || app.models.default)) || {}).loaded)
+  let currentModel = $derived(app.models.models.find((m) => m.id === (current || app.models.default)) || {})
+  let currentLoaded = $derived(currentModel.loaded)
+  let currentSees = $derived(app.models.switchable ? !!currentModel.vision : !!app.models.default_vision)
+  let blindImages = $derived(!currentSees && pending.some((p) => p.file?.kind === 'image'))
 
   $effect(() => {
     load(id)
@@ -322,7 +389,8 @@
       {#each rows as m (m.id)}
         <div class="msg {m.role}">
           {#if m.role === 'user'}
-            <div class="bubble">{m.content}</div>
+            {#if m.files?.length}<Attachments files={m.files} />{/if}
+            {#if m.content}<div class="bubble">{m.content}</div>{/if}
           {:else}
             {#each m.calls as c (c.id)}<ToolCall call={c} />{/each}
             {#if m.content}<div class="bubble"><Answer text={m.content} /></div>{/if}
@@ -366,16 +434,42 @@
     </div>
 
     <div class="composer-wrap">
-      <form class="composer" onsubmit={(e) => { e.preventDefault(); send() }}>
-        <textarea bind:value={input} use:autosize onkeydown={keydown} rows="1" placeholder={t('Message Athena')} aria-label={t('Message')} disabled={sending}></textarea>
+      <form class="composer" class:dragging onsubmit={(e) => { e.preventDefault(); send() }}
+        ondragover={(e) => { e.preventDefault(); dragging = true }} ondragleave={() => (dragging = false)} ondrop={drop}>
+        {#if pending.length}
+          <div class="pending">
+            {#each pending as p (p.key)}
+              <div class="file-chip" class:bad={p.error} title={p.error || p.file?.note || ''}>
+                <Icon name={p.file?.kind === 'image' ? 'image' : 'file'} size={15} />
+                <span class="fc-name">{p.name}</span>
+                {#if p.error}
+                  <span class="mono-sm">{t('failed')}</span>
+                {:else if !p.file}
+                  <span class="mono-sm num">{Math.round(p.progress * 100)}%</span>
+                {:else}
+                  <span class="mono-sm">{bytes(p.size)}{p.file.pages ? ' / ' + t('{n} pages', { n: p.file.pages }) : ''}</span>
+                  {#if p.file.kind === 'binary' || (p.file.kind !== 'image' && !p.file.chars)}<span class="tag">{t('not read')}</span>{:else if p.file.note}<span class="tag warn">{t('partly read')}</span>{/if}
+                {/if}
+                <button type="button" class="ghost icon-btn" onclick={() => removeFile(p.key)} aria-label={t('Remove {f}', { f: p.name })}><Icon name="close" size={14} /></button>
+              </div>
+            {/each}
+          </div>
+          {#if blindImages}
+            <div class="mono-sm warn-note">{t('The current model cannot see images: it only gets their names. Pick a model that sees images to ask about them.')}</div>
+          {/if}
+          <div class="mono-sm muted">{t('Attached files count as outside text: actions and messages in this conversation will ask you first.')}</div>
+        {/if}
+        <textarea bind:value={input} use:autosize onkeydown={keydown} onpaste={paste} rows="1" placeholder={t('Message Athena')} aria-label={t('Message')} disabled={sending}></textarea>
         <div class="composer-bar">
+          <input type="file" multiple bind:this={picker} class="file-input" onchange={(e) => { addFiles(e.currentTarget.files); e.currentTarget.value = '' }} />
+          <button type="button" class="ghost icon-btn" onclick={() => picker.click()} title={t('Attach files: images, documents, code (up to {n} MB each)', { n: MAX_MB })} aria-label={t('Attach files')}><Icon name="attach" size={17} /></button>
           {#if app.models.switchable && app.models.models.length}
             <label class="model-pick" title={t('The one model Athena uses, in every conversation and job. Only one model runs at a time; switching loads the new one on the next answer.')}>
               <span class="dot" class:ok={currentLoaded}></span>
               <select value={current} disabled={switching} onchange={(e) => pickModel(e.currentTarget.value)} aria-label={t('Model for all of Athena')}>
                 <option value="">{app.models.default} ({t('default')})</option>
                 {#each app.models.models.filter((m) => m.id !== app.models.default) as m (m.id)}
-                  <option value={m.id}>{m.id}{m.loaded ? ' (' + t('loaded') + ')' : ''}{m.endpoint !== 'primary' ? ', ' + m.endpoint : ''}</option>
+                  <option value={m.id}>{m.id}{m.loaded ? ' (' + t('loaded') + ')' : ''}{m.vision ? ', ' + t('sees images') : ''}{m.endpoint !== 'primary' ? ', ' + m.endpoint : ''}</option>
                 {/each}
               </select>
             </label>
@@ -386,7 +480,7 @@
           {#if live}
             <button type="button" class="icon-btn send" onclick={cancel} title={t('Stop')} aria-label={t('Stop')}><Icon name="stop" size={16} /></button>
           {:else}
-            <button type="submit" class="primary icon-btn send" disabled={!input.trim() || sending || busy} aria-label={t('Send')}><Icon name="send" size={17} /></button>
+            <button type="submit" class="primary icon-btn send" disabled={(!input.trim() && !ready.length) || sending || busy || uploading} aria-label={t('Send')}><Icon name="send" size={17} /></button>
           {/if}
         </div>
       </form>

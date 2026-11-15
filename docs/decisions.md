@@ -40,7 +40,7 @@ what seemed right, and any of them can be changed. Newest last.
     model API refuses a history with an unanswered call otherwise.
 19. **default** Limits: 8 model rounds per turn (the last round gets no tools and must answer), 30 tool calls per
     minute per conversation, 30 000 characters per tool result, 90 s per tool call.
-20. **default** Memory recall runs once per turn (first round), top 5 above the memory service's threshold, with an
+20. **default** Memory recall runs once when a turn starts or resumes and is kept for all its rounds, top 5 above the memory service's threshold, with an
     8 s timeout. If memory is down, the turn goes on without it and says so in the status line.
 21. **default** Standing permissions ("always") do not expire unless the API call sets `expires_in_days`. They are
     listed and can be withdrawn under Settings. "This conversation" ends with the conversation.
@@ -139,3 +139,8 @@ what seemed right, and any of them can be changed. Newest last.
     to models listed in `VISION_MODELS` only; others get the file's name and a note that they cannot see it.
 54. **default** At most 10 files per message. A file taken out of the message before sending is deleted. Files stay
     when a conversation is archived; there is no file list in the UI yet.
+55. **default** The prompt is laid out for the model server's prompt cache: the system prompt holds only what stays
+    the same (the date, not the time), and what changes every turn (the time, recalled memories, the "has read
+    outside text" note) is a `<context>` block before the newest user message. The server then reads only the new
+    end of a conversation instead of all of it every turn (reading a prompt is the slow part when the model's
+    experts are in RAM).

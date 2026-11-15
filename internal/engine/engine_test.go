@@ -506,3 +506,53 @@ func TestAttachments(t *testing.T) {
 		t.Fatalf("%.3000s", body)
 	}
 }
+
+type fakeMemory struct{}
+
+func (fakeMemory) Recall(context.Context, string, string, int) ([]Recalled, error) {
+	return []Recalled{{ID: "m1", Text: "lives in Bergen", Kind: "place", Score: 0.8}}, nil
+}
+
+// The system prompt must not change from turn to turn, so the model server can keep what it read; what changes (the
+// time, memories) goes before the newest user message, and stays the same for every round of a turn.
+func TestPromptStaysCacheable(t *testing.T) {
+	r := newRig(t,
+		func([]llm.Message, []llm.Tool) map[string]any { return call("t__echo", `{"text":"x"}`) },
+		func([]llm.Message, []llm.Tool) map[string]any { return say("first") },
+		func([]llm.Message, []llm.Tool) map[string]any { return say("second") })
+	r.e.Memory = fakeMemory{}
+	ctx := context.Background()
+	sid := r.session(t)
+	turn, _ := r.e.Start(ctx, r.owner, sid, "user", "where do I live?")
+	r.wait(t, turn, "done")
+	turn, _ = r.e.Start(ctx, r.owner, sid, "user", "and now?")
+	r.wait(t, turn, "done")
+	seen := r.model.seen
+	if len(seen) != 3 {
+		t.Fatal("requests:", len(seen))
+	}
+	if seen[0][0].Content != seen[2][0].Content || strings.Contains(seen[0][0].Content, "Bergen") {
+		t.Fatalf("the system prompt must be the same in every turn and hold no memories:\n%s\n---\n%s", seen[0][0].Content, seen[2][0].Content)
+	}
+	firstUser := func(msgs []llm.Message, nth int) string {
+		n := 0
+		for _, m := range msgs {
+			if m.Role == "user" {
+				if n == nth {
+					return m.Content
+				}
+				n++
+			}
+		}
+		return ""
+	}
+	// round 2 of the first turn: memories still there, the message unchanged since round 1
+	if firstUser(seen[0], 0) != firstUser(seen[1], 0) || !strings.Contains(firstUser(seen[1], 0), "lives in Bergen") {
+		t.Fatalf("the newest message must carry the same context in every round:\n%s", firstUser(seen[1], 0))
+	}
+	// the second turn: the old message is plain again, the new one has the context
+	if firstUser(seen[2], 0) != "where do I live?" || !strings.HasPrefix(firstUser(seen[2], 1), "<context added by Athena") ||
+		!strings.HasSuffix(firstUser(seen[2], 1), "and now?") {
+		t.Fatalf("%q / %q", firstUser(seen[2], 0), firstUser(seen[2], 1))
+	}
+}

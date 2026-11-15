@@ -49,9 +49,11 @@ func TestFilesOverHTTP(t *testing.T) {
 	fsrv := httptest.NewServer(mcpx.Handler(mcp.NewServer(&mcp.Implementation{Name: "files"}, nil), mcpx.Config{Name: "files", Routes: fsvc.Routes}, map[string]string{"core": "ftok"}, slog.Default()))
 	defer fsrv.Close()
 
-	var seen []byte
+	// the model's request arrives on the server's goroutine
+	seenc := make(chan []byte, 4)
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen, _ = io.ReadAll(r.Body)
+		b, _ := io.ReadAll(r.Body)
+		seenc <- b
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"model":"fake","choices":[{"message":{"role":"assistant","content":"A grey square."}}]}`))
 	}))
@@ -120,9 +122,11 @@ func TestFilesOverHTTP(t *testing.T) {
 		t.Fatal(res.StatusCode)
 	}
 	res.Body.Close()
-	deadline := time.Now().Add(10 * time.Second)
-	for seen == nil && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
+	var seen []byte
+	select {
+	case seen = <-seenc:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the model was never asked")
 	}
 	if !bytes.Contains(seen, []byte("data:image/jpeg;base64,")) || !bytes.Contains(seen, []byte("attachment: page.html")) {
 		t.Fatalf("%.2000s", seen)

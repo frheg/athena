@@ -1,6 +1,6 @@
 #!/bin/sh
 # usage: scripts/clients <dir> [version]
-# Builds the programs that run outside the server (athena-speaker) as static Linux binaries into <dir>, with Docker.
+# Builds the programs that run outside the server (athena-speaker, athena-live) as static Linux binaries into <dir>, with Docker.
 set -eu
 dir=${1:?directory, for example ~/.local/bin}
 ver=${2:-dev}

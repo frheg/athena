@@ -153,7 +153,15 @@ func (c *Client) Stream(ctx context.Context, path string, on func(Event)) error 
 		return err
 	}
 	defer res.Body.Close()
-	sc := bufio.NewScanner(res.Body)
+	if err := ReadEvents(res.Body, on); err != nil {
+		return err
+	}
+	return io.EOF
+}
+
+// ReadEvents reads Server-Sent Events from r and calls on for each, until r ends (nil) or fails.
+func ReadEvents(r io.Reader, on func(Event)) error {
+	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64<<10), 4<<20)
 	ev := Event{Type: "message"}
 	for sc.Scan() {
@@ -174,10 +182,7 @@ func (c *Client) Stream(ctx context.Context, path string, on func(Event)) error 
 			ev.Data = append(ev.Data, d...)
 		}
 	}
-	if err := sc.Err(); err != nil {
-		return err
-	}
-	return io.EOF
+	return sc.Err()
 }
 
 // Forever runs Stream again whenever it stops, waiting a little longer each time (up to a minute), until ctx ends.

@@ -9,7 +9,7 @@ RUN go mod download
 COPY cmd cmd
 COPY internal internal
 ARG VERSION=dev
-RUN for c in core mcp-web mcp-sources mcp-everyday mcp-notes mcp-cluster-read mcp-cluster-act memory notify files athena-speaker; do \
+RUN for c in core mcp-web mcp-sources mcp-everyday mcp-notes mcp-cluster-read mcp-cluster-act memory notify files athena-speaker athena-live; do \
       CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/$c ./cmd/$c || exit 1; \
     done
 
@@ -53,3 +53,4 @@ COPY --from=build /out/files /app
 # the programs that run on other machines, as plain files: docker build --target clients -o <dir> .
 FROM scratch AS clients
 COPY --from=build /out/athena-speaker /athena-speaker
+COPY --from=build /out/athena-live /athena-live

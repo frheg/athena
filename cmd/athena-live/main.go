@@ -218,13 +218,17 @@ func (a *app) trim() {
 // listen finds speech in the microphone's frames and has each stretch written down, one at a time.
 func (a *app) listen(ctx context.Context, frames <-chan []int16) {
 	v := newVAD()
-	heard := make(chan []int16, 2)
+	type stretch struct {
+		samples  []int16
+		from, to time.Time
+	}
+	heard := make(chan stretch, 2)
 	go func() {
-		for s := range heard {
+		for st := range heard {
 			a.mu.Lock()
 			a.transcribes++
 			a.mu.Unlock()
-			text, err := transcribe(ctx, a.stt, a.wake+".", s)
+			text, err := transcribe(ctx, a.stt, a.wake+".", st.samples)
 			a.mu.Lock()
 			a.transcribes--
 			a.mu.Unlock()
@@ -232,7 +236,7 @@ func (a *app) listen(ctx context.Context, frames <-chan []int16) {
 				a.note(err.Error())
 				continue
 			}
-			a.heard(text)
+			a.heard(text, st.from, st.to)
 		}
 	}()
 	for {
@@ -253,8 +257,10 @@ func (a *app) listen(ctx context.Context, frames <-chan []int16) {
 			a.hearing = on
 			a.mu.Unlock()
 			if s != nil {
+				now := time.Now()
+				st := stretch{s, now.Add(-time.Duration(len(s)) * time.Second / rate), now}
 				select {
-				case heard <- s:
+				case heard <- st:
 				default: // still writing down the last two: this one is lost
 				}
 			}
@@ -271,7 +277,7 @@ func (a *app) heard(text string) {
 	rest, woke := findWake(text, a.wake)
 	talking, _ := a.voice.state()
 	a.mu.Lock()
-	busy := talking || a.turn != ""
+	busy := talking || a.turn != "" || overlaps
 	approval := a.approval
 	awake := time.Now().Before(a.awakeUntil)
 	a.mu.Unlock()

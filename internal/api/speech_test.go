@@ -126,4 +126,14 @@ func TestSpeechOverHTTP(t *testing.T) {
 	if res, body := get("/api/speech/sample?lang=no"); res.StatusCode != 200 || !strings.Contains(body, "Athena") {
 		t.Fatal(res.StatusCode, body)
 	}
+	// any text (live mode speaks answers a sentence at a time), made speakable first
+	res, err = http.Post(srv.URL+"/api/speech", "application/json", strings.NewReader(`{"text":"**Hei** fra [Athena](https://x.y)."}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != 200 || string(b) != "RIFFHei fra Athena." {
+		t.Fatalf("any text, as speakable text: %d %q", res.StatusCode, b)
+	}
 }

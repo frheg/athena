@@ -1,6 +1,7 @@
 # All Go services, one target per image:
 #   docker build --target core -t athena-core .
 # Targets: core, mcp-web, mcp-sources, mcp-everyday, mcp-notes, mcp-cluster-read, mcp-cluster-act, memory, notify, files.
+# Programs for other machines (static binaries, no image): docker build --target clients -o <dir> . (scripts/clients)
 FROM golang:1.26.10-alpine@sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -8,7 +9,7 @@ RUN go mod download
 COPY cmd cmd
 COPY internal internal
 ARG VERSION=dev
-RUN for c in core mcp-web mcp-sources mcp-everyday mcp-notes mcp-cluster-read mcp-cluster-act memory notify files; do \
+RUN for c in core mcp-web mcp-sources mcp-everyday mcp-notes mcp-cluster-read mcp-cluster-act memory notify files athena-speaker; do \
       CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/$c ./cmd/$c || exit 1; \
     done
 
@@ -48,3 +49,7 @@ COPY --from=build /out/mcp-notes /app
 
 FROM base AS files
 COPY --from=build /out/files /app
+
+# the programs that run on other machines, as plain files: docker build --target clients -o <dir> .
+FROM scratch AS clients
+COPY --from=build /out/athena-speaker /athena-speaker

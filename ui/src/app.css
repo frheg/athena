@@ -414,3 +414,7 @@ a.file-chip:hover { border-color: var(--line-2); background: var(--sunken); }
 @media (max-width: 760px) {
   .speech-grid { grid-template-columns: minmax(0, 1fr); }
 }
+.speaker-pick {
+  font-family: var(--mono); font-size: 0.74rem; border-radius: 999px; padding: 0.3rem 1.6rem 0.3rem 0.7rem; background-color: var(--sunken);
+  border-color: transparent; color: var(--ink-2); max-width: 140px;
+}

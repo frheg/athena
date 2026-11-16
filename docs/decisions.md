@@ -161,3 +161,15 @@ what seemed right, and any of them can be changed. Newest last.
     loads while one plays. Voices and speed are one setting for all devices (Settings); "read new answers aloud"
     is per device. A browser only plays sound after you have touched the page, so it can refuse to start reading
     by itself; the answer's play button always works.
+59. **Answers can be read aloud on another machine** (asked for): the page offers "This device" and each connected
+    speaker. A speaker is `athena-speaker` on a machine with a loudspeaker; it connects out to Athena
+    (`GET /api/speakers/{name}/jobs`, an event stream) and waits, so nothing has to reach that machine. On "play",
+    core sends it a job and it fetches the audio a piece at a time, like the browser does, and reports what it
+    plays. The choice of speaker and "read new answers aloud" are per device.
+60. **default** Programs for other machines (`athena-speaker`, later `athena-live`) are built with Docker as plain
+    static binaries (`scripts/clients <dir>`) and sign in like the browser: `ATHENA_URL` with basic sign-in at the
+    gate (`ATHENA_USER`, `ATHENA_PASSWORD`), or `ATHENA_TOKEN`.
+61. **default** Live mode is built on the normal API: a spoken message carries `voice: true` and what the camera saw
+    (`seen`, at most 500 characters); both are stored with the message and go into the newest message's context
+    block, which tells the model to answer in a few plain spoken sentences. `POST /api/speech` speaks any text
+    (live mode reads an answer sentence by sentence as it streams in).

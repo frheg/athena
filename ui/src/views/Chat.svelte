@@ -10,7 +10,7 @@
   import ToolCall from './parts/ToolCall.svelte'
   import ApprovalCard from './parts/ApprovalCard.svelte'
   import Attachments from './parts/Attachments.svelte'
-  import { player, speak, stop as stopSpeech, toggleAuto } from '../lib/speech.svelte.js'
+  import { player, speak, stop as stopSpeech, toggleAuto, setTarget, refreshSpeakers } from '../lib/speech.svelte.js'
 
   let canSpeak = $derived(!!app.status?.info?.speech)
 
@@ -312,6 +312,14 @@
     })
   })
 
+  // speakers come and go (a machine starts, a connection drops), so the list is fetched now and then
+  $effect(() => {
+    if (!canSpeak) return
+    refreshSpeakers()
+    const iv = setInterval(refreshSpeakers, 15000)
+    return () => clearInterval(iv)
+  })
+
   const statusText = {
     running: t('Working'),
     thinking: t('Thinking'),
@@ -488,8 +496,18 @@
           {/if}
           {#if canSpeak}
             <button type="button" class="ghost icon-btn read-aloud" class:on={player.auto} onclick={toggleAuto} aria-pressed={player.auto}
-              title={player.auto ? t('Reading new answers aloud on this device. Press to stop.') : t('Read new answers aloud on this device')}
+              title={player.auto ? t('Reading new answers aloud. Press to stop.') : t('Read new answers aloud')}
               aria-label={t('Read answers aloud')}><Icon name="speaker" size={17} /></button>
+            {#if player.speakers.length || player.target}
+              <select class="speaker-pick" value={player.target} onchange={(e) => setTarget(e.currentTarget.value)}
+                title={t('Where answers are read aloud')} aria-label={t('Play on')}>
+                <option value="">{t('This device')}</option>
+                {#each player.speakers as s (s.name)}<option value={s.name}>{s.name}</option>{/each}
+                {#if player.target && !player.speakers.some((s) => s.name === player.target)}
+                  <option value={player.target} disabled>{player.target} ({t('offline')})</option>
+                {/if}
+              </select>
+            {/if}
           {/if}
           <span class="mono-sm hide-narrow">{t('Enter to send, Shift+Enter for a new line')}</span>
           {#if live}

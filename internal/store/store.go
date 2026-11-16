@@ -62,6 +62,8 @@ type Message struct {
 	ToolCallID string          `json:"tool_call_id,omitempty"`
 	Name       string          `json:"name,omitempty"`
 	Files      []Attachment    `json:"files,omitempty"`
+	Voice      bool            `json:"voice,omitempty"` // spoken in live mode: the answer is read aloud
+	Seen       string          `json:"seen,omitempty"`  // what the camera saw when it was said (live mode)
 	CreatedAt  time.Time       `json:"created_at"`
 }
 
@@ -247,8 +249,8 @@ func (s *Store) AddMessage(ctx context.Context, sessionID string, turnID *string
 		files = b
 	}
 	err := pgx.BeginFunc(ctx, s.DB, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `INSERT INTO messages (session_id, turn_id, role, content, tool_calls, tool_call_id, name, files)
-			VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,''),$8) RETURNING id`, sessionID, turnID, m.Role, m.Content, calls, m.ToolCallID, m.Name, files).Scan(&id); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO messages (session_id, turn_id, role, content, tool_calls, tool_call_id, name, files, voice, seen)
+			VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,''),$8,$9,$10) RETURNING id`, sessionID, turnID, m.Role, m.Content, calls, m.ToolCallID, m.Name, files, m.Voice, m.Seen).Scan(&id); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `UPDATE sessions SET updated_at = now() WHERE id = $1`, sessionID)
@@ -259,10 +261,10 @@ func (s *Store) AddMessage(ctx context.Context, sessionID string, turnID *string
 
 // Messages returns a conversation's messages in order (the newest `limit`, 0 = all).
 func (s *Store) Messages(ctx context.Context, sessionID string, limit int) ([]Message, error) {
-	q := `SELECT id, turn_id, role, content, tool_calls, COALESCE(tool_call_id,''), COALESCE(name,''), files, created_at FROM messages WHERE session_id = $1 ORDER BY id`
+	q := `SELECT id, turn_id, role, content, tool_calls, COALESCE(tool_call_id,''), COALESCE(name,''), files, voice, seen, created_at FROM messages WHERE session_id = $1 ORDER BY id`
 	args := []any{sessionID}
 	if limit > 0 {
-		q = `SELECT * FROM (SELECT id, turn_id, role, content, tool_calls, COALESCE(tool_call_id,''), COALESCE(name,''), files, created_at FROM messages
+		q = `SELECT * FROM (SELECT id, turn_id, role, content, tool_calls, COALESCE(tool_call_id,''), COALESCE(name,''), files, voice, seen, created_at FROM messages
 			WHERE session_id = $1 ORDER BY id DESC LIMIT $2) x ORDER BY id`
 		args = append(args, limit)
 	}
@@ -273,7 +275,7 @@ func (s *Store) Messages(ctx context.Context, sessionID string, limit int) ([]Me
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Message, error) {
 		var m Message
 		var calls, files []byte
-		err := r.Scan(&m.ID, &m.TurnID, &m.Role, &m.Content, &calls, &m.ToolCallID, &m.Name, &files, &m.CreatedAt)
+		err := r.Scan(&m.ID, &m.TurnID, &m.Role, &m.Content, &calls, &m.ToolCallID, &m.Name, &files, &m.Voice, &m.Seen, &m.CreatedAt)
 		m.ToolCalls = calls
 		if len(files) > 0 {
 			_ = json.Unmarshal(files, &m.Files)
@@ -286,9 +288,9 @@ func (s *Store) Messages(ctx context.Context, sessionID string, limit int) ([]Me
 func (s *Store) Message(ctx context.Context, owner string, id int64) (Message, error) {
 	var m Message
 	var calls, files []byte
-	err := s.DB.QueryRow(ctx, `SELECT m.id, m.turn_id, m.role, m.content, m.tool_calls, COALESCE(m.tool_call_id,''), COALESCE(m.name,''), m.files, m.created_at
+	err := s.DB.QueryRow(ctx, `SELECT m.id, m.turn_id, m.role, m.content, m.tool_calls, COALESCE(m.tool_call_id,''), COALESCE(m.name,''), m.files, m.voice, m.seen, m.created_at
 		FROM messages m JOIN sessions s ON s.id = m.session_id WHERE m.id = $1 AND s.owner = $2`, id, owner).Scan(
-		&m.ID, &m.TurnID, &m.Role, &m.Content, &calls, &m.ToolCallID, &m.Name, &files, &m.CreatedAt)
+		&m.ID, &m.TurnID, &m.Role, &m.Content, &calls, &m.ToolCallID, &m.Name, &files, &m.Voice, &m.Seen, &m.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return m, ErrNotFound
 	}

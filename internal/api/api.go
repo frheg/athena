@@ -30,11 +30,13 @@ type API struct {
 	Memory    *memory.Client // nil: no memory service
 	Files     *files.Client  // nil: no attachments
 	Speech    *speech.Client // nil: nothing is read aloud
-	Owner     string         // the one user, for now
-	Token     string         // API_TOKEN: when set, every request needs "Authorization: Bearer <token>"
-	Version   string
-	Info      map[string]any // shown on the status page (model names and such; no secrets)
-	Ready     func(ctx context.Context) error
+
+	speakers speakers
+	Owner    string // the one user, for now
+	Token    string // API_TOKEN: when set, every request needs "Authorization: Bearer <token>"
+	Version  string
+	Info     map[string]any // shown on the status page (model names and such; no secrets)
+	Ready    func(ctx context.Context) error
 }
 
 type ctxKey struct{}
@@ -119,6 +121,12 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /api/speech", a.speechSettings)
 	m.HandleFunc("PUT /api/speech", a.setSpeech)
 	m.HandleFunc("GET /api/speech/sample", a.speechSample)
+	m.HandleFunc("POST /api/speech", a.speakText)
+	m.HandleFunc("POST /api/messages/{id}/speak", a.speakOn)
+	m.HandleFunc("GET /api/speakers", a.speakerList)
+	m.HandleFunc("GET /api/speakers/{name}/jobs", a.speakerJobs)
+	m.HandleFunc("POST /api/speakers/{name}/stop", a.speakerStop)
+	m.HandleFunc("POST /api/speakers/{name}/state", a.speakerState)
 	m.HandleFunc("POST /api/files", a.uploadFile)
 	m.HandleFunc("GET /api/files", a.fileProxy)
 	m.HandleFunc("GET /api/files/{id}", a.fileProxy)
@@ -232,6 +240,8 @@ func (a *API) postMessage(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Text  string   `json:"text"`
 		Files []string `json:"files"` // ids from POST /api/files
+		Voice bool     `json:"voice"` // spoken in live mode: the answer will be read aloud
+		Seen  string   `json:"seen"`  // live mode: what the camera saw (pose, gestures), at most 500 characters
 	}
 	if err := decode(r, &in); err != nil {
 		fail(w, err)
@@ -246,7 +256,11 @@ func (a *API) postMessage(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	turn, err := a.E.StartWith(r.Context(), a.owner(r), r.PathValue("id"), "user", in.Text, att)
+	if len(in.Seen) > 500 {
+		fail(w, bad("seen is longer than 500 characters"))
+		return
+	}
+	turn, err := a.E.StartMessage(r.Context(), a.owner(r), r.PathValue("id"), "user", store.Message{Content: in.Text, Files: att, Voice: in.Voice, Seen: in.Seen})
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) || errors.Is(err, engine.ErrBusy) {
 			fail(w, err)

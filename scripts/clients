@@ -1,0 +1,9 @@
+#!/bin/sh
+# usage: scripts/clients <dir> [version]
+# Builds the programs that run outside the server (athena-speaker) as static Linux binaries into <dir>, with Docker.
+set -eu
+dir=${1:?directory, for example ~/.local/bin}
+ver=${2:-dev}
+cd "$(dirname "$0")/.."
+DOCKER_BUILDKIT=1 docker build -q --build-arg VERSION="$ver" --target clients -o "$dir" . >/dev/null
+ls -l "$dir"/athena-*

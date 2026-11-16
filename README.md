@@ -46,6 +46,9 @@ and the rules. Edit it and core picks up the change within 30 seconds.
 | `speech` | answers read aloud (Piper voices, Norwegian and English; Python, and the image includes GPL-3.0 software) |
 | `mcp-cluster-read`, `mcp-cluster-act` | a Kubernetes cluster: look, and the listed actions |
 
+**On other machines** (built as plain binaries with `scripts/clients <dir>`): `athena-speaker` plays answers aloud on that
+machine when you pick it in the chat.
+
 Each MCP server works with any MCP client, not only Athena.
 
 ## Develop

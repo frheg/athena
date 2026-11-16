@@ -556,3 +556,39 @@ func TestPromptStaysCacheable(t *testing.T) {
 		t.Fatalf("%q / %q", firstUser(seen[2], 0), firstUser(seen[2], 1))
 	}
 }
+
+// A message spoken in live mode tells the model to answer briefly for reading aloud, with what the camera saw; a
+// typed message after it does not.
+func TestLiveMessage(t *testing.T) {
+	r := newRig(t,
+		func([]llm.Message, []llm.Tool) map[string]any { return say("Hei! Du holder tommelen opp.") },
+		func([]llm.Message, []llm.Tool) map[string]any { return say("ok") })
+	ctx := context.Background()
+	sid := r.session(t)
+	turn, err := r.e.StartMessage(ctx, r.owner, sid, "user", store.Message{Content: "hva gjør jeg nå?", Voice: true, Seen: "right hand: thumbs up"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.wait(t, turn, "done")
+	turn, _ = r.e.Start(ctx, r.owner, sid, "user", "typed")
+	r.wait(t, turn, "done")
+	newest := func(msgs []llm.Message) string {
+		for i := len(msgs) - 1; i >= 0; i-- {
+			if msgs[i].Role == "user" {
+				return msgs[i].Content
+			}
+		}
+		return ""
+	}
+	first, second := newest(r.model.seen[0]), newest(r.model.seen[1])
+	if !strings.Contains(first, "read aloud") || !strings.Contains(first, "right hand: thumbs up") || !strings.HasSuffix(first, "hva gjør jeg nå?") {
+		t.Fatalf("%s", first)
+	}
+	if strings.Contains(second, "read aloud") || strings.Contains(second, "thumbs up") {
+		t.Fatalf("a typed message is not read aloud: %s", second)
+	}
+	msgs, _ := r.e.Store.Messages(ctx, sid, 0)
+	if !msgs[0].Voice || msgs[0].Seen != "right hand: thumbs up" {
+		t.Fatal("voice and seen are stored with the message", msgs[0])
+	}
+}

@@ -159,3 +159,33 @@ func (a *API) setSpeech(w http.ResponseWriter, r *http.Request) {
 	}
 	a.speechSettings(w, r)
 }
+
+// speakText reads any text aloud with the chosen voices (live mode speaks answers sentence by sentence as they
+// stream in, before they are stored). Body: {"text": "..."}, at most 2000 characters; the answer is WAV.
+func (a *API) speakText(w http.ResponseWriter, r *http.Request) {
+	if a.speechOff(w) {
+		return
+	}
+	var in struct {
+		Text string `json:"text"`
+	}
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	text := speech.Speakable(in.Text)
+	if text == "" {
+		fail(w, bad("nothing to say"))
+		return
+	}
+	if len(text) > 2000 {
+		fail(w, bad("the text is longer than 2000 characters: send it a sentence or two at a time"))
+		return
+	}
+	b, voice, err := a.Speech.Speak(r.Context(), text, a.speechOptions(r.Context()))
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeAudio(w, b, voice, 0)
+}

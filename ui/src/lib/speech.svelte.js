@@ -1,25 +1,51 @@
-// Reads answers aloud in the browser. Core makes the audio a piece at a time (whole sentences), so playing starts
-// after the first piece; the next one loads while the current one plays. Over Bluetooth, this plays wherever the
-// phone or laptop sends its sound.
+// Reads answers aloud: in the browser (this device), or on a speaker connected to Athena, such as one next to a
+// Bluetooth speaker (athena-speaker). In the browser, core makes the audio a piece at a time (whole sentences), so
+// playing starts after the first piece and the next one loads while one plays.
 import { t } from './i18n.js'
 import { toast } from './state.svelte.js'
+import { get, post } from './api.js'
 
-function stored() {
+function stored(key, def) {
   try {
-    return localStorage.getItem('athena.readAloud') === '1'
+    return localStorage.getItem(key) ?? def
   } catch {
-    return false
+    return def
+  }
+}
+function keep(key, value) {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // private window: the choice lasts until the page closes
   }
 }
 
-// id: the message being read; auto: read every new answer aloud (per device)
-export const player = $state({ id: null, part: 0, loading: false, auto: stored() })
+// id: the message being read; auto: read every new answer aloud; target: '' = this device, else a speaker's name.
+// auto and target are per device.
+export const player = $state({ id: null, part: 0, loading: false, auto: stored('athena.readAloud', '0') === '1',
+  target: stored('athena.speaker', ''), speakers: [] })
 
 let audio = null
 let next = null
 let run = 0
+let watch = null
 
 const url = (id, part) => `api/messages/${id}/speech?part=${part}`
+
+export async function refreshSpeakers() {
+  try {
+    player.speakers = (await get('/speakers')).speakers
+  } catch {
+    player.speakers = []
+  }
+  return player.speakers
+}
+
+export function setTarget(name) {
+  stop()
+  player.target = name
+  keep('athena.speaker', name)
+}
 
 export function stop() {
   run++
@@ -31,12 +57,15 @@ export function stop() {
     }
   }
   audio = next = null
+  clearInterval(watch)
+  if (player.id && player.target) post('/speakers/' + player.target + '/stop').catch(() => {})
   player.id = null
   player.loading = false
 }
 
 export function speak(id) {
   stop()
+  if (player.target) return speakOn(id, player.target)
   const mine = ++run
   player.id = id
   player.loading = true
@@ -71,12 +100,40 @@ export function speak(id) {
   play(0)
 }
 
+// speakOn sends the answer to a speaker, then follows what it reports until it is done.
+async function speakOn(id, name) {
+  const mine = ++run
+  player.id = id
+  player.loading = true
+  try {
+    await post('/messages/' + id + '/speak', { to: name })
+  } catch (e) {
+    if (mine === run) {
+      toast(t('Could not play on {s}: {e}', { s: name, e: e.message }))
+      player.id = null
+      player.loading = false
+    }
+    return
+  }
+  let started = false
+  watch = setInterval(async () => {
+    if (mine !== run) return clearInterval(watch)
+    const sp = (await refreshSpeakers()).find((s) => s.name === name)
+    if (sp?.playing === id) {
+      started = true
+      player.loading = false
+    } else if (started || !sp) {
+      clearInterval(watch)
+      if (mine === run) {
+        player.id = null
+        player.loading = false
+      }
+    }
+  }, 1000)
+}
+
 export function toggleAuto() {
   player.auto = !player.auto
-  try {
-    localStorage.setItem('athena.readAloud', player.auto ? '1' : '0')
-  } catch {
-    // private window: the choice lasts until the page closes
-  }
+  keep('athena.readAloud', player.auto ? '1' : '0')
   if (!player.auto) stop()
 }

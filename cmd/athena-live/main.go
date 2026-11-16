@@ -270,11 +270,21 @@ func (a *app) listen(ctx context.Context, frames <-chan []int16) {
 
 // heard decides what to do with what was said: a wake word, a follow-up, an answer to an approval, a request to stop,
 // or nothing. Without the wake word and outside a conversation, the text is dropped right here.
-func (a *app) heard(text string) {
+func (a *app) heard(text string, from, to time.Time) {
 	if heardNothing(text) {
 		return
 	}
 	rest, woke := findWake(text, a.wake)
+	// The microphone also hears what Athena says. Speech heard while it spoke counts as speaking over it, and speech
+	// that is mostly its own words then is its own voice, dropped; unless it starts with the wake word and Athena did
+	// not say that word itself.
+	overlaps, spoken := a.voice.echo(from, to)
+	if overlaps && sameWords(text, spoken) {
+		saidWake := strings.Contains(strings.ToLower(spoken), strings.ToLower(a.wake))
+		if !woke || saidWake {
+			return
+		}
+	}
 	talking, _ := a.voice.state()
 	a.mu.Lock()
 	busy := talking || a.turn != "" || overlaps

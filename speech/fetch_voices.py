@@ -14,6 +14,7 @@ for line in open(listing, encoding="utf-8"):
     got = hashlib.sha256(data).hexdigest()
     if got != want:
         sys.exit(f"{name}: sha256 {got}, want {want}")
+    os.makedirs(os.path.dirname(os.path.join(out, name)), exist_ok=True)
     with open(os.path.join(out, name), "wb") as f:
         f.write(data)
     print(f"{name}: {len(data)} bytes, ok")

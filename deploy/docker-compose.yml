@@ -143,7 +143,7 @@ services:
     image: athena-speech
     restart: unless-stopped
     read_only: true
-    tmpfs: [/tmp]
+    tmpfs: [/tmp:exec] # Kokoro's phonemizer copies its espeak library to /tmp and loads it from there
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     environment:

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/frheg/athena/internal/mcpx"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -67,7 +68,12 @@ func (s *Service) Register(srv *mcp.Server) {
 			if err != nil {
 				return nil, Sent{}, err
 			}
-			return nil, Sent{OK: true, DryRun: m.DryRun}, nil
+			if m.DryRun {
+				// said in words: a model reads "ok": true as sent, whatever dry_run says
+				return mcpx.Text("NOT SENT: no mail server is set up (dry run), so the message was only logged. Tell the user it " +
+					"did not reach them, and that mail needs SMTP settings first."), Sent{OK: false, DryRun: true}, nil
+			}
+			return nil, Sent{OK: true}, nil
 		})
 	mcp.AddTool(srv, &mcp.Tool{Name: "recipients", Description: "List the names messages can be sent to."},
 		func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, map[string][]string, error) {

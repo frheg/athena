@@ -176,3 +176,11 @@ what seemed right, and any of them can be changed. Newest last.
 62. **The volume of a speaker is set from the page** (asked for): next to the speaker choice in the chat, and under
     Settings, Speakers. Core sends the speaker a volume job; athena-speaker sets its output with `wpctl` (PipeWire)
     and reports volume and mute with what it plays, and every 15 s, so a change on the speaker itself shows too.
+63. **English is spoken by Kokoro** (asked for: a more natural voice that is still fast). Kokoro (82M parameters,
+    Apache 2.0, kokoro-onnx on the CPU) makes a sentence in about 0.7 s, five times faster than it is spoken, and is
+    the default English voice (`kokoro-af_heart`); Settings offers 15 of its best English voices. It has no Norwegian,
+    so Norwegian stays with Piper. Measured and not chosen (2026-11-16): Chatterbox Multilingual on the CPU is 3 to 5
+    times slower than real time, and with its own voice its Norwegian sounded Swedish; realistic Norwegian waits for
+    Chatterbox (a Norwegian fine-tune) on the GPU.
+64. **default** A mail tool call in a dry run (no mail server) answers "NOT SENT" in words, so the model cannot
+    report it as sent.

@@ -1,4 +1,4 @@
-"""speech: text to speech for assistants, with Piper voices, behind an OpenAI-compatible API.
+"""speech: text to speech for assistants, with Piper and Kokoro voices, behind an OpenAI-compatible API.
 
     POST /v1/audio/speech   {"input": "...", "voice": "auto" | "<voice id>", "speaker": 0, "speed": 1.0,
                              "voices": {"no": "<id>", "en": "<id>"}}  ->  audio/wav
@@ -8,13 +8,14 @@
     GET  /health, /ready
 
 Environment:
-    VOICES_DIR      where the voices are (<id>.onnx and <id>.onnx.json), default /voices
-    DEFAULT_VOICES  language=voice pairs for "auto", default no=no_NO-talesyntese-medium,en=en_GB-cori-high
+    VOICES_DIR      where the voices are, default /voices: Piper voices as <id>.onnx and <id>.onnx.json, and Kokoro as
+                    kokoro/kokoro-v1.0.onnx and kokoro/voices-v1.0.bin (its voices are kokoro-<name>, English)
+    DEFAULT_VOICES  language=voice pairs for "auto", default no=no_NO-talesyntese-medium,en=kokoro-af_heart
     TOKENS          caller=token pairs; a request must carry "Authorization: Bearer <token>". Empty = no check.
     LISTEN          host:port, default 0.0.0.0:8080
 
-Python and the standard library only, besides Piper itself (GPL-3.0): one process, a thread per request, a lock per
-voice. Text is limited to 5000 characters a request; callers split longer text.
+Python and the standard library only, besides Piper (GPL-3.0) and Kokoro (Apache 2.0): one process, a thread per request,
+a lock per voice. Kokoro sounds more natural and has English only; Piper speaks Norwegian. Text is limited to 5000 characters a request; callers split longer text.
 """
 
 import hmac
@@ -28,7 +29,9 @@ import threading
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import numpy
 import onnxruntime
+from kokoro_onnx import Kokoro
 from piper import PiperVoice, SynthesisConfig
 
 onnxruntime.disable_telemetry_events()  # onnxruntime has usage telemetry; nothing here should phone home
@@ -48,7 +51,11 @@ def pairs(s):
 
 
 VOICES_DIR = os.environ.get("VOICES_DIR", "/voices")
-DEFAULTS = pairs(os.environ.get("DEFAULT_VOICES", "no=no_NO-talesyntese-medium,en=en_GB-cori-high"))
+DEFAULTS = pairs(os.environ.get("DEFAULT_VOICES", "no=no_NO-talesyntese-medium,en=kokoro-af_heart"))
+# the Kokoro voices offered: the best rated ones (af/am American, bf/bm British; f woman, m man)
+KOKORO = ["af_heart", "af_bella", "af_nicole", "af_sarah", "af_nova", "am_michael", "am_fenrir", "am_puck", "am_eric",
+          "bf_emma", "bf_isabella", "bf_alice", "bm_george", "bm_fable", "bm_daniel"]
+KOKORO_DIR = os.path.join(VOICES_DIR, "kokoro")
 TOKENS = pairs(os.environ.get("TOKENS", ""))
 
 
@@ -59,6 +66,9 @@ def available():
         if f.endswith(".onnx") and os.path.exists(os.path.join(VOICES_DIR, f + ".json")):
             vid = f[: -len(".onnx")]
             out[vid] = vid.split("_", 1)[0]
+    if os.path.exists(os.path.join(KOKORO_DIR, "kokoro-v1.0.onnx")):
+        for name in KOKORO:
+            out["kokoro-" + name] = "en"
     return out
 
 
@@ -88,7 +98,35 @@ def language(text):
     return "no" if no > en else "en"
 
 
+_kokoro, _kokoro_lock = None, threading.Lock()
+
+
+def kokoro():
+    global _kokoro
+    with _load_lock:
+        if _kokoro is None:
+            _kokoro = Kokoro(os.path.join(KOKORO_DIR, "kokoro-v1.0.onnx"), os.path.join(KOKORO_DIR, "voices-v1.0.bin"))
+        return _kokoro
+
+
+def wav16(samples, rate):
+    """float samples (-1 to 1) as a 16-bit mono WAV"""
+    pcm = (numpy.clip(samples, -1, 1) * 32767).astype("<i2").tobytes()
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
 def synthesize(text, vid, speaker=None, speed=1.0):
+    if vid.startswith("kokoro-"):
+        name = vid[len("kokoro-"):]
+        with _kokoro_lock:
+            samples, rate = kokoro().create(text, voice=name, speed=speed, lang="en-gb" if name.startswith("b") else "en-us")
+        return wav16(samples, rate)
     v, lock = voice(vid)
     cfg = SynthesisConfig(speaker_id=speaker if v.config.num_speakers > 1 else None, length_scale=1.0 / speed)
     buf = io.BytesIO()
@@ -134,9 +172,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/v1/models":
             data = []
             for vid, lang in available().items():
-                with open(os.path.join(VOICES_DIR, vid + ".onnx.json"), encoding="utf-8") as f:
-                    cfg = json.load(f)
-                data.append({"id": vid, "object": "model", "language": lang, "speakers": cfg.get("num_speakers", 1),
+                speakers = 1
+                if not vid.startswith("kokoro-"):
+                    with open(os.path.join(VOICES_DIR, vid + ".onnx.json"), encoding="utf-8") as f:
+                        speakers = json.load(f).get("num_speakers", 1)
+                data.append({"id": vid, "object": "model", "language": lang, "speakers": speakers,
                              "default": DEFAULTS.get(lang) == vid})
             return self.send(200, {"object": "list", "data": data, "defaults": DEFAULTS})
         return self.error(404, "no such endpoint")

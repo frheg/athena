@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"testing"
+	"time"
 )
 
 func tone(ms int, amp float64) [][]int16 {
@@ -77,5 +78,29 @@ func TestSentences(t *testing.T) {
 	}
 	if s.add("Klokka er 3.5 nå") != nil || s.flush() != "Klokka er 3.5 nå" {
 		t.Fatal("a point inside a number does not end a sentence")
+	}
+}
+
+func TestEcho(t *testing.T) {
+	v := &voice{}
+	t0 := time.Now().Add(-10 * time.Second)
+	v.said = []said{{text: "Klokka er halv tre om natta, og det er på tide å sove.", from: t0, to: t0.Add(4 * time.Second)}}
+	if over, _ := v.echo(t0.Add(5*time.Second), t0.Add(6*time.Second)); over {
+		t.Fatal("after it spoke (and the tail) is not an overlap")
+	}
+	over, spoken := v.echo(t0.Add(time.Second), t0.Add(3*time.Second))
+	if !over {
+		t.Fatal("while it spoke is an overlap")
+	}
+	if !sameWords("Klokka er halv tre om natta", spoken) {
+		t.Fatal("its own words, heard back, are its own voice")
+	}
+	if sameWords("Athena, stopp nå", spoken) || sameWords("Hva med været?", spoken) {
+		t.Fatal("other words are someone speaking over it")
+	}
+	// still playing: the end is open
+	v.said = append(v.said, said{text: "Vi kan snakke mer i morgen.", from: time.Now().Add(-time.Second)})
+	if over, _ := v.echo(time.Now().Add(-500*time.Millisecond), time.Now()); !over {
+		t.Fatal("what plays now overlaps")
 	}
 }

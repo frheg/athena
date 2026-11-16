@@ -6,3 +6,6 @@ no_NO-nvcc-medium.onnx 3f51702946d9544898440a1a66906155661a9d680ee103130ff68f733
 no_NO-nvcc-medium.onnx.json 98410e911e5a9076ac4677a79b08b20f98c54f550c4388e29978f6bafa32b83d https://huggingface.co/rhasspy/piper-voices/resolve/e9ab671f2a0e50a701b34361136ba3e6a3a9eb0c/no/no_NO/nvcc/medium/no_NO-nvcc-medium.onnx.json
 en_GB-cori-high.onnx 470b4dd634c98f8a4850d7626ffc3dfc90774628eeef6605a6dd8f88f30a5903 https://huggingface.co/rhasspy/piper-voices/resolve/e9ab671f2a0e50a701b34361136ba3e6a3a9eb0c/en/en_GB/cori/high/en_GB-cori-high.onnx
 en_GB-cori-high.onnx.json 9e7fb5b5671612c22f3c81cbe46c1ae87b031a4632bcb509e499dad6f1e2adec https://huggingface.co/rhasspy/piper-voices/resolve/e9ab671f2a0e50a701b34361136ba3e6a3a9eb0c/en/en_GB/cori/high/en_GB-cori-high.onnx.json
+# Kokoro (English, more natural than Piper; Apache 2.0): the model and its voice table, from kokoro-onnx's release
+kokoro/kokoro-v1.0.onnx 7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5 https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
+kokoro/voices-v1.0.bin bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin

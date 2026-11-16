@@ -103,15 +103,24 @@ func TestSpeakers(t *testing.T) {
 	if j["type"] != "play" || j["message_id"] != float64(id) || j["parts"].(float64) < 2 {
 		t.Fatal("a play job with the message and its number of parts:", j)
 	}
-	if code, _ := post("/api/speakers/kratos/state", `{"playing":`+strconv.FormatInt(id, 10)+`}`); code != 200 {
+	if code, _ := post("/api/speakers/kratos/state", `{"playing":`+strconv.FormatInt(id, 10)+`,"volume":0.4,"muted":true}`); code != 200 {
 		t.Fatal(code)
 	}
 	r, _ := http.Get(srv.URL + "/api/speakers")
 	var l struct{ Speakers []speaker }
 	_ = json.NewDecoder(r.Body).Decode(&l)
 	r.Body.Close()
-	if l.Speakers[0].Playing != id {
-		t.Fatal("the page sees what it plays", l)
+	if l.Speakers[0].Playing != id || l.Speakers[0].Volume == nil || *l.Speakers[0].Volume != 0.4 || !l.Speakers[0].Muted {
+		t.Fatal("the page sees what it plays and how loud", l)
+	}
+	if code, _ := post("/api/speakers/kratos/volume", `{"volume":1.5}`); code != 400 {
+		t.Fatal("volume is from 0 to 1:", code)
+	}
+	if code, _ := post("/api/speakers/kratos/volume", `{"volume":0.7,"muted":false}`); code != 202 {
+		t.Fatal(code)
+	}
+	if j := <-jobs; j["type"] != "volume" || j["volume"] != 0.7 || j["muted"] != false {
+		t.Fatal(j)
 	}
 	if code, _ := post("/api/speakers/kratos/stop", `{}`); code != 200 {
 		t.Fatal(code)

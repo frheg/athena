@@ -127,6 +127,7 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /api/speakers/{name}/jobs", a.speakerJobs)
 	m.HandleFunc("POST /api/speakers/{name}/stop", a.speakerStop)
 	m.HandleFunc("POST /api/speakers/{name}/state", a.speakerState)
+	m.HandleFunc("POST /api/speakers/{name}/volume", a.speakerVolume)
 	m.HandleFunc("POST /api/files", a.uploadFile)
 	m.HandleFunc("GET /api/files", a.fileProxy)
 	m.HandleFunc("GET /api/files/{id}", a.fileProxy)

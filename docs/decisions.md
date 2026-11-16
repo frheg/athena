@@ -173,3 +173,6 @@ what seemed right, and any of them can be changed. Newest last.
     (`seen`, at most 500 characters); both are stored with the message and go into the newest message's context
     block, which tells the model to answer in a few plain spoken sentences. `POST /api/speech` speaks any text
     (live mode reads an answer sentence by sentence as it streams in).
+62. **The volume of a speaker is set from the page** (asked for): next to the speaker choice in the chat, and under
+    Settings, Speakers. Core sends the speaker a volume job; athena-speaker sets its output with `wpctl` (PipeWire)
+    and reports volume and mute with what it plays, and every 15 s, so a change on the speaker itself shows too.

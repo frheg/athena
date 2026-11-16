@@ -27,6 +27,8 @@ type speaker struct {
 	Name    string    `json:"name"`
 	Since   time.Time `json:"since"`
 	Playing int64     `json:"playing,omitempty"` // the message it reports playing
+	Volume  *float64  `json:"volume,omitempty"`  // its output volume, 0 to 1, when it can tell
+	Muted   bool      `json:"muted,omitempty"`
 	jobs    chan map[string]any
 }
 
@@ -171,10 +173,13 @@ func (a *API) speakerStop(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// speakerState is the speaker telling what it plays now (body {"playing": <message id> or 0}), for the page.
+// speakerState is the speaker telling what it plays now and how loud, for the page: body {"playing": <message id>
+// or 0, "volume": 0 to 1, "muted": bool}; volume is left out by a speaker that cannot tell.
 func (a *API) speakerState(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Playing int64 `json:"playing"`
+		Playing int64    `json:"playing"`
+		Volume  *float64 `json:"volume"`
+		Muted   bool     `json:"muted"`
 	}
 	if err := decode(r, &in); err != nil {
 		fail(w, err)
@@ -183,7 +188,7 @@ func (a *API) speakerState(w http.ResponseWriter, r *http.Request) {
 	a.speakers.mu.Lock()
 	sp := a.speakers.all[a.owner(r)+"/"+r.PathValue("name")]
 	if sp != nil {
-		sp.Playing = in.Playing
+		sp.Playing, sp.Volume, sp.Muted = in.Playing, in.Volume, in.Muted
 	}
 	a.speakers.mu.Unlock()
 	if sp == nil {
@@ -191,4 +196,34 @@ func (a *API) speakerState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// speakerVolume sets a speaker's volume: body {"volume": 0 to 1} and/or {"muted": bool}.
+func (a *API) speakerVolume(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Volume *float64 `json:"volume"`
+		Muted  *bool    `json:"muted"`
+	}
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	if in.Volume == nil && in.Muted == nil {
+		fail(w, bad("give volume (0 to 1) or muted"))
+		return
+	}
+	job := map[string]any{"type": "volume"}
+	if in.Volume != nil {
+		if *in.Volume < 0 || *in.Volume > 1 {
+			fail(w, bad("volume is from 0 to 1"))
+			return
+		}
+		job["volume"] = *in.Volume
+	}
+	if in.Muted != nil {
+		job["muted"] = *in.Muted
+	}
+	if a.sendJob(w, r, r.PathValue("name"), job) {
+		writeJSON(w, http.StatusAccepted, map[string]bool{"ok": true})
+	}
 }

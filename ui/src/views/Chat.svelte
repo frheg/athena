@@ -10,6 +10,7 @@
   import ToolCall from './parts/ToolCall.svelte'
   import ApprovalCard from './parts/ApprovalCard.svelte'
   import Attachments from './parts/Attachments.svelte'
+  import VolumeControl from './parts/VolumeControl.svelte'
   import { player, speak, stop as stopSpeech, toggleAuto, setTarget, refreshSpeakers } from '../lib/speech.svelte.js'
 
   let canSpeak = $derived(!!app.status?.info?.speech)
@@ -507,6 +508,7 @@
                   <option value={player.target} disabled>{player.target} ({t('offline')})</option>
                 {/if}
               </select>
+              {#each player.speakers.filter((s) => s.name === player.target) as s (s.name)}<VolumeControl speaker={s} compact />{/each}
             {/if}
           {/if}
           <span class="mono-sm hide-narrow">{t('Enter to send, Shift+Enter for a new line')}</span>

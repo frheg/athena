@@ -137,3 +137,24 @@ export function toggleAuto() {
   keep('athena.readAloud', player.auto ? '1' : '0')
   if (!player.auto) stop()
 }
+
+// volume (0 to 1) and mute of a speaker; the page shows the change at once, the speaker confirms it in its next report
+export async function setVolume(name, volume) {
+  const sp = player.speakers.find((s) => s.name === name)
+  if (sp) sp.volume = volume
+  try {
+    await post('/speakers/' + name + '/volume', { volume })
+  } catch (e) {
+    toast(t('Could not change the volume on {s}: {e}', { s: name, e: e.message }))
+  }
+}
+
+export async function setMuted(name, muted) {
+  const sp = player.speakers.find((s) => s.name === name)
+  if (sp) sp.muted = muted
+  try {
+    await post('/speakers/' + name + '/volume', { muted })
+  } catch (e) {
+    toast(t('Could not change the volume on {s}: {e}', { s: name, e: e.message }))
+  }
+}

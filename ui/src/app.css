@@ -418,3 +418,13 @@ a.file-chip:hover { border-color: var(--line-2); background: var(--sunken); }
   font-family: var(--mono); font-size: 0.74rem; border-radius: 999px; padding: 0.3rem 1.6rem 0.3rem 0.7rem; background-color: var(--sunken);
   border-color: transparent; color: var(--ink-2); max-width: 140px;
 }
+.volume { display: inline-flex; align-items: center; gap: 0.3rem; }
+.volume input[type='range'] { width: 110px; accent-color: var(--accent-ink); }
+.volume.compact input[type='range'] { width: 80px; }
+.volume .num { min-width: 3.2em; }
+.volume .icon-btn { width: 26px; height: 26px; padding: 0; }
+.speaker-list li { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; }
+@media (max-width: 760px) {
+  .volume.compact .num { display: none; }
+  .volume.compact input[type='range'] { width: 64px; }
+}

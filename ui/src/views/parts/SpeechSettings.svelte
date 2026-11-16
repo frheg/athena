@@ -5,6 +5,8 @@
   import { t } from '../../lib/i18n.js'
   import { toast } from '../../lib/state.svelte.js'
   import Icon from '../../lib/Icon.svelte'
+  import VolumeControl from './VolumeControl.svelte'
+  import { player, refreshSpeakers } from '../../lib/speech.svelte.js'
 
   let s = $state(null)
   let sample = null
@@ -42,6 +44,9 @@
 
   $effect(() => {
     load()
+    refreshSpeakers()
+    const iv = setInterval(refreshSpeakers, 5000)
+    return () => clearInterval(iv)
   })
 
   const langs = [
@@ -78,4 +83,22 @@
       </label>
     </div>
   {/if}
+</div>
+
+<h2>{t('Speakers')}</h2>
+<p class="muted small">{t('Machines that can read answers aloud (athena-speaker). Pick one in the chat, next to the read-aloud button.')}</p>
+<div class="card">
+  <ul class="list speaker-list">
+    {#each player.speakers as sp (sp.name)}
+      <li>
+        <span class="tool-name">{sp.name}</span>
+        <span class="tag ok">{t('connected')}</span>
+        {#if sp.playing}<span class="tag">{t('reading aloud')}</span>{/if}
+        <span class="grow"></span>
+        <VolumeControl speaker={sp} />
+      </li>
+    {:else}
+      <li class="empty-note">{t('No speaker is connected.')}</li>
+    {/each}
+  </ul>
 </div>

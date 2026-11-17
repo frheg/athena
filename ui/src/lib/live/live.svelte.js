@@ -34,7 +34,9 @@ function keep(key, value) {
 export const live = $state({
   on: false, starting: false, session: '', mood: 'asleep', level: -90, mouth: 0, happy: false,
   muted: false, cameraAvailable: false, cameraOn: stored('athena.liveCamera', '1') === '1', cameraReady: false, preview: stored('athena.livePreview', '1') === '1',
-  seen: '', heard: '', note: '', approval: null, turn: '',
+  seen: '', heard: '', other: '', note: '', approval: null, turn: '',
+  mic: stored('athena.liveMic', ''), micLabel: '', mics: [], // the microphone chosen ('' = the browser's default), and those there are
+  soundBlocked: false, // the browser holds sound back until the page is touched
 })
 
 let ctx = null
@@ -87,6 +89,7 @@ class Voice {
           this.play()
         }
       } catch (e) {
+        console.warn('live: could not speak', e)
         if (gen === this.gen) live.note = t('Could not speak: {e}', { e: e.message })
       } finally {
         this.fetching = false
@@ -184,11 +187,10 @@ export async function start(session, h = {}) {
   hooks = h
   try {
     ctx = new AudioContext()
-    await ctx.resume()
+    ctx.resume().catch(() => {}) // not awaited: a browser that holds sound back never settles it until the page is touched
     voice = new Voice()
-    vad = new VAD()
-    mic = new Mic(ctx, frame)
-    await mic.start()
+    await openMic(live.mic)
+    watchSound()
     live.session = session
     live.on = true
     live.note = t('Say "{w}, ..." to talk. For 15 seconds after an answer, no name is needed.', { w: WAKE })
@@ -213,7 +215,53 @@ export function stop() {
   ctx?.close().catch(() => {})
   ctx = mic = vad = camera = voice = null
   sent.reset()
-  Object.assign(live, { on: false, session: '', mood: 'asleep', level: -90, mouth: 0, seen: '', heard: '', note: '', approval: null, turn: '', cameraReady: false })
+  Object.assign(live, { on: false, session: '', mood: 'asleep', level: -90, mouth: 0, seen: '', heard: '', other: '', note: '', approval: null, turn: '', cameraReady: false, soundBlocked: false })
+}
+
+// openMic opens a microphone (a fresh VAD, so it learns the new one's background); one that is gone falls back to
+// the default
+async function openMic(id) {
+  mic?.stop()
+  vad = new VAD()
+  mic = new Mic(ctx, frame)
+  let got
+  try {
+    got = await mic.start(id)
+  } catch (e) {
+    if (!id || (e.name !== 'OverconstrainedError' && e.name !== 'NotFoundError')) throw e
+    mic = new Mic(ctx, frame)
+    got = await mic.start('')
+  }
+  live.micLabel = got.label
+  // the names of the microphones are only shown once one may be used
+  const devices = await navigator.mediaDevices.enumerateDevices().catch(() => [])
+  live.mics = devices.filter((d) => d.kind === 'audioinput' && d.deviceId).map((d) => ({ id: d.deviceId, label: d.label || t('Microphone') }))
+}
+
+export async function setMic(id) {
+  live.mic = id
+  keep('athena.liveMic', id)
+  if (!live.on) return
+  try {
+    await openMic(id)
+  } catch (e) {
+    live.note = t('Could not open that microphone: {e}', { e: e.message })
+  }
+}
+
+// watchSound notices a browser that holds sound back (no microphone, no voice) and starts it on the next touch
+function watchSound() {
+  const check = () => {
+    if (!ctx) return
+    live.soundBlocked = ctx.state !== 'running'
+    if (live.soundBlocked) {
+      const go = () => ctx?.resume().then(check).catch(() => {})
+      document.addEventListener('pointerdown', go, { once: true })
+      document.addEventListener('keydown', go, { once: true })
+    }
+  }
+  setTimeout(check, 500)
+  ctx.onstatechange = check
 }
 
 async function startCamera() {
@@ -289,7 +337,10 @@ function frame(f) {
       if (!res.ok) throw new Error(d.error || res.statusText)
       if (live.on) heard(d.text || '', from, to)
     })
-    .catch((e) => live.on && (live.note = t('Speech recognition failed: {e}', { e: e.message })))
+    .catch((e) => {
+      console.warn('live: speech recognition failed', e)
+      if (live.on) live.note = t('Speech recognition failed: {e}', { e: e.message })
+    })
     .finally(() => transcribing--)
 }
 
@@ -325,6 +376,8 @@ function heard(text, from, to) {
     ask(rest)
   } else if (awake) {
     ask(text)
+  } else {
+    showOther(text) // not for Athena: shown here for a moment, then gone
   }
 }
 
@@ -440,4 +493,13 @@ function gesture(g) {
   } else if (g.endsWith('thumbs up')) {
     happyUntil = performance.now() + 3000
   }
+}
+
+// showOther shows speech that was not for Athena (no name, not in a conversation), so you can tell it hears you;
+// it is not sent anywhere
+let otherTimer
+function showOther(text) {
+  live.other = text
+  clearTimeout(otherTimer)
+  otherTimer = setTimeout(() => (live.other = ''), 6000)
 }

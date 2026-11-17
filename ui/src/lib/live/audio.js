@@ -24,16 +24,24 @@ export class Mic {
     this.cnt = 0
   }
 
-  async start() {
+  // start opens the microphone: deviceId picks one ('' = the browser's default). It reports the one it got.
+  async start(deviceId = '') {
     this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+        ...(deviceId ? { deviceId: { exact: deviceId } } : {}) },
     })
     await this.ctx.audioWorklet.addModule(new URL('mic-worklet.js', document.baseURI)) // a file of its own: the page's rules forbid inline code
     this.src = this.ctx.createMediaStreamSource(this.stream)
     this.node = new AudioWorkletNode(this.ctx, 'tap')
     this.node.port.onmessage = (e) => this.take(e.data)
     this.src.connect(this.node)
+    // to the speakers through silence: some browsers only run a node that leads to the output
+    this.mute = this.ctx.createGain()
+    this.mute.gain.value = 0
+    this.node.connect(this.mute).connect(this.ctx.destination)
     this.ratio = this.ctx.sampleRate / RATE
+    const track = this.stream.getAudioTracks()[0]
+    return { id: track?.getSettings().deviceId || '', label: track?.label || '' }
   }
 
   // take turns the context's rate into 16 kHz by averaging (a simple low-pass that is enough for speech)
@@ -60,20 +68,25 @@ export class Mic {
     if (this.node) this.node.port.onmessage = null
     this.src?.disconnect()
     this.node?.disconnect()
+    this.mute?.disconnect()
     for (const t of this.stream?.getTracks() || []) t.stop()
-    this.stream = this.src = this.node = null
+    this.stream = this.src = this.node = this.mute = null
   }
 }
 
-// VAD finds stretches of speech by loudness: louder than the background (which it learns while nobody speaks) by
-// margin dB for a few frames starts one; quiet for the hangover ends it. It keeps a little audio from before the
-// start, so the first sound is not cut.
+// VAD finds stretches of speech by loudness: louder than the background by margin dB for a few frames starts one;
+// quiet for the hangover ends it. It keeps a little audio from before the start, so the first sound is not cut.
+// The background is the quietest 100 ms of the last 3 seconds, learned all the time (also while it thinks someone
+// speaks): speech has short pauses that show the background, and a steady noise (a fan, a hum, a microphone the
+// browser turns up) becomes the background within 3 seconds instead of passing for speech.
 export class VAD {
   margin = 12 // dB above the background
   hangover = 35 // frames of quiet that end speech (700 ms)
   maxFrames = 750 // longest stretch (15 s)
   minVoiced = 15 // fewer loud frames is a knock or a cough (300 ms)
   floor = -60
+  blocks = [] // the loudness of the last 30 blocks of 100 ms
+  block = [] // the frames of the block being filled
   loud = 0
   quiet = 0
   voiced = 0
@@ -84,10 +97,12 @@ export class VAD {
   // add takes a frame; it returns a finished stretch of speech (Int16Array) if this frame ended one, else null
   add(f) {
     const db = level(f)
-    if (!this.on) {
-      // the background follows quiet fast and rises slowly, so a voice does not become the background
-      this.floor = db < this.floor ? 0.9 * this.floor + 0.1 * db : 0.995 * this.floor + 0.005 * db
-      this.floor = Math.max(this.floor, -75)
+    this.block.push(db)
+    if (this.block.length === 5) {
+      this.blocks.push(this.block.reduce((a, b) => a + b) / 5)
+      if (this.blocks.length > 30) this.blocks.shift()
+      this.block = []
+      this.floor = Math.max(Math.min(...this.blocks), -75)
     }
     const above = db > this.floor + this.margin
     if (!this.on) {

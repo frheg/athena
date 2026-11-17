@@ -195,3 +195,8 @@ what seemed right, and any of them can be changed. Newest last.
     still drops its own voice by timing and words. Browsers allow the microphone and camera only on https pages.
 66. **default** The chat's side panels can be hidden, per device: the conversation list (its button in the chat's
     header), and focus, which hides the menu as well. Leaving the chat or opening another conversation ends live mode.
+67. **default** Live mode's speech finder learns the background all the time: the quietest 100 ms of the last 3 s.
+    A steady noise (a fan, a hum, a microphone the browser turns up) became "speech" before and held the finder on
+    for 15 s; now it is background within 3 s. The live panel shows the microphone's level, lets you pick the
+    microphone, says when the browser holds sound back until the page is touched, and shows for a moment what it
+    heard without the name (not sent).

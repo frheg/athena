@@ -481,3 +481,8 @@ a.file-chip:hover { border-color: var(--line-2); background: var(--sunken); }
   .avatar { --size: 64px !important; }
   .avatar svg { width: 64px; height: 64px; }
 }
+.live-meter { width: 56px; height: 6px; border-radius: 999px; background: var(--sunken); overflow: hidden; flex: none; }
+.live-meter > span { display: block; height: 100%; background: var(--accent-ink); border-radius: 999px; transition: width 0.06s linear; }
+.live-mic { font-family: var(--mono); font-size: 0.72rem; max-width: 180px; padding: 0.25rem 1.6rem 0.25rem 0.6rem; border-radius: 999px; background-color: var(--sunken); border-color: transparent; text-overflow: ellipsis; }
+.live-other { color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 760px) { .live-mic { max-width: 120px; } }

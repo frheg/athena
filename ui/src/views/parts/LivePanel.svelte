@@ -5,9 +5,11 @@
   import { t } from '../../lib/i18n.js'
   import Icon from '../../lib/Icon.svelte'
   import Avatar from './Avatar.svelte'
-  import { live, getCamera, setCamera, setPreview, setMuted, talk, stopAll, stop } from '../../lib/live/live.svelte.js'
+  import { live, getCamera, setCamera, setPreview, setMuted, setMic, talk, stopAll, stop } from '../../lib/live/live.svelte.js'
 
   let canvas = $state()
+  // the microphone's loudness from -70 dB to -10 dB, so you can see that it hears you
+  let meter = $derived(live.muted ? 0 : Math.max(0, Math.min(1, (live.level + 70) / 60)))
 
   const moods = {
     asleep: t('Say "Athena" to talk'),
@@ -69,7 +71,11 @@
     <Avatar mood={live.mood} level={live.muted ? -90 : live.level} mouth={live.mouth} happy={live.happy} />
     <div class="live-text">
       <div class="label" aria-live="polite">{live.muted ? t('Microphone off') : moods[live.mood]}</div>
+      {#if live.soundBlocked}
+        <div class="mono-sm warn-note">{t('The browser holds sound back: click or press a key anywhere on the page.')}</div>
+      {/if}
       {#if live.heard}<div class="live-heard">{live.heard}</div>{/if}
+      {#if live.other}<div class="mono-sm live-other" title={t('Heard without the name "Athena", so not sent to Athena')}>{t('Not for me')}: {live.other}</div>{/if}
       {#if live.note}<div class="mono-sm">{live.note}</div>{/if}
       {#if live.seen}<div class="mono-sm live-seen" title={t('What Athena sees on the camera. These words go with what you say.')}>{t('Sees')}: {live.seen}</div>{/if}
     </div>
@@ -80,6 +86,12 @@
   <div class="live-bar">
     <button type="button" class="ghost icon-btn" class:off={live.muted} onclick={() => setMuted(!live.muted)} aria-pressed={live.muted}
       title={live.muted ? t('Turn the microphone on') : t('Turn the microphone off')} aria-label={t('Microphone')}><Icon name={live.muted ? 'mic-off' : 'mic'} size={17} /></button>
+    <span class="live-meter" title={t('How loud the microphone hears: {m}', { m: live.micLabel || t('the default microphone') })} aria-hidden="true"><span style:width={meter * 100 + '%'}></span></span>
+    {#if live.mics.length > 1}
+      <select class="live-mic" value={live.mic || live.mics.find((m) => m.label === live.micLabel)?.id || ''} onchange={(e) => setMic(e.currentTarget.value)} aria-label={t('Microphone')}>
+        {#each live.mics as m (m.id)}<option value={m.id}>{m.label}</option>{/each}
+      </select>
+    {/if}
     {#if live.cameraAvailable}
       <button type="button" class="ghost icon-btn" class:off={!live.cameraOn} onclick={() => setCamera(!live.cameraOn)} aria-pressed={live.cameraOn}
         title={live.cameraOn ? t('Turn the camera off') : t('Turn the camera on: Athena sees your pose and gestures')} aria-label={t('Camera')}><Icon name={live.cameraOn ? 'camera' : 'camera-off'} size={17} /></button>

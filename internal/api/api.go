@@ -19,6 +19,7 @@ import (
 	"github.com/frheg/athena/internal/files"
 	"github.com/frheg/athena/internal/gate"
 	"github.com/frheg/athena/internal/memory"
+	"github.com/frheg/athena/internal/pose"
 	"github.com/frheg/athena/internal/speech"
 	"github.com/frheg/athena/internal/store"
 )
@@ -30,6 +31,7 @@ type API struct {
 	Memory    *memory.Client // nil: no memory service
 	Files     *files.Client  // nil: no attachments
 	Speech    *speech.Client // nil: nothing is read aloud
+	Pose      *pose.Client   // nil: live mode has no camera
 
 	speakers speakers
 	Owner    string // the one user, for now
@@ -122,6 +124,8 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("PUT /api/speech", a.setSpeech)
 	m.HandleFunc("GET /api/speech/sample", a.speechSample)
 	m.HandleFunc("POST /api/speech", a.speakText)
+	m.HandleFunc("POST /api/transcribe", a.transcribe)
+	m.HandleFunc("POST /api/camera", a.camera)
 	m.HandleFunc("POST /api/messages/{id}/speak", a.speakOn)
 	m.HandleFunc("GET /api/speakers", a.speakerList)
 	m.HandleFunc("GET /api/speakers/{name}/jobs", a.speakerJobs)

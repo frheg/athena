@@ -60,6 +60,8 @@ services:
       VISION_MODELS: ${VISION_MODELS}
       TTS_URL: http://speech:8080/v1
       TTS_TOKEN: ${TOKEN_SPEECH}
+      POSE_URL: http://pose:8080
+      POSE_TOKEN: ${TOKEN_POSE}
       NOTIFY_URL: http://notify:8080
       NOTIFY_TOKEN: ${TOKEN_NOTIFY}
       REMINDERS_URL: http://mcp-notes:8080
@@ -137,7 +139,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy, required: false }
 
-  # text to speech (Piper, Python): answers read aloud in the browser
+  # text to speech (Kokoro, Piper) and speech to text (whisper.cpp), Python: answers read aloud, and live mode
   speech:
     build: ../speech
     image: athena-speech
@@ -149,6 +151,18 @@ services:
     environment:
       TOKENS: core=${TOKEN_SPEECH}
       DEFAULT_VOICES: ${SPEECH_VOICES:-no=no_NO-talesyntese-medium,en=en_GB-cori-high}
+
+  # the camera in live mode: pose, hands and gestures (MediaPipe, Python, CPU)
+  pose:
+    build: ../pose
+    image: athena-pose
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      TOKENS: core=${TOKEN_POSE}
 
   notify:
     <<: *go

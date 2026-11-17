@@ -1,5 +1,6 @@
 // Package speech turns answers into speech: markdown into text worth reading aloud, that text into parts short
-// enough to start playing quickly, and a client for an OpenAI-compatible speech server (POST /v1/audio/speech).
+// enough to start playing quickly, and a client for an OpenAI-compatible speech server (POST /v1/audio/speech, and
+// /v1/audio/transcriptions for speech to text).
 package speech
 
 import (
@@ -8,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"regexp"
 	"strings"
@@ -197,4 +199,48 @@ func (c *Client) Speak(ctx context.Context, text string, o Options) ([]byte, str
 	defer res.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(res.Body, 64<<20))
 	return b, res.Header.Get("X-Voice"), err
+}
+
+// Transcribe writes down the speech in a WAV (POST /audio/transcriptions). The prompt helps spell names, like the
+// wake word.
+func (c *Client) Transcribe(ctx context.Context, wav []byte, prompt string) (string, error) {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, _ := mw.CreateFormFile("file", "speech.wav")
+	_, _ = fw.Write(wav)
+	_ = mw.WriteField("response_format", "json")
+	_ = mw.WriteField("temperature", "0")
+	if prompt != "" {
+		_ = mw.WriteField("prompt", prompt)
+	}
+	mw.Close()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.URL, "/")+"/audio/transcriptions", &body)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	hc := c.HTTP
+	if hc == nil {
+		hc = &http.Client{Timeout: time.Minute}
+	}
+	res, err := hc.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	var out struct {
+		Text  string `json:"text"`
+		Error string `json:"error"`
+	}
+	b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err := json.Unmarshal(b, &out); err != nil || res.StatusCode >= 300 {
+		if out.Error == "" {
+			out.Error = strings.TrimSpace(string(b))
+		}
+		return "", fmt.Errorf("speech recognition: %d %s", res.StatusCode, out.Error)
+	}
+	return strings.TrimSpace(out.Text), nil
 }

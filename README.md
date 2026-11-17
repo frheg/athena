@@ -43,7 +43,8 @@ and the rules. Edit it and core picks up the change within 30 seconds.
 | `memory` | what Athena remembers about you |
 | `notify` | mail out, to listed recipients only |
 | `files` | what you attach to a chat: text read out of documents, previews of images |
-| `speech` | answers read aloud: Kokoro (English) and Piper (Norwegian) voices; Python, and the image includes GPL-3.0 software |
+| `speech` | answers read aloud (Kokoro for English, Piper for Norwegian), and speech written down for live mode (whisper.cpp); Python, and the image includes GPL-3.0 software |
+| `pose` | live mode's camera: pose, hands and gestures in small pictures from the browser (MediaPipe, CPU); nothing is kept |
 | `mcp-cluster-read`, `mcp-cluster-act` | a Kubernetes cluster: look, and the listed actions |
 
 **On other machines** (built as plain binaries with `scripts/clients <dir>`): `athena-speaker` plays answers aloud on that

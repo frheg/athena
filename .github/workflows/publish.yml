@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-24.04
     strategy:
       matrix:
-        target: [core, mcp-web, mcp-sources, mcp-everyday, mcp-notes, mcp-cluster-read, mcp-cluster-act, memory, notify, ui]
+        target: [core, mcp-web, mcp-sources, mcp-everyday, mcp-notes, mcp-cluster-read, mcp-cluster-act, memory, notify, files, ui, speech, pose]
     steps:
       - uses: actions/checkout@v4
       - uses: docker/login-action@v3
@@ -18,8 +18,8 @@ jobs:
         env: { TARGET: "${{ matrix.target }}", VERSION: "${{ github.ref_name }}", OWNER: "${{ github.repository_owner }}" }
         run: |
           image="ghcr.io/${OWNER}/athena-${TARGET}:${VERSION#v}"
-          if [ "$TARGET" = ui ]; then
-            docker buildx build --push -t "$image" ui
+          if [ "$TARGET" = ui ] || [ "$TARGET" = speech ] || [ "$TARGET" = pose ]; then
+            docker buildx build --push -t "$image" "$TARGET" # its own folder
           else
             docker buildx build --push --build-arg VERSION="${VERSION#v}" --target "$TARGET" -t "$image" .
           fi

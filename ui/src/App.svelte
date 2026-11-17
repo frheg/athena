@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte'
-  import { app, startOwnerStream } from './lib/state.svelte.js'
+  import { app, layout, startOwnerStream } from './lib/state.svelte.js'
   import { t } from './lib/i18n.js'
   import { num } from './lib/format.js'
   import Icon from './lib/Icon.svelte'
@@ -38,7 +38,7 @@
   let moreBadge = $derived(views.filter((v) => !bottom.includes(v.id)).reduce((n, v) => n + badge(v.id), 0))
 </script>
 
-<div class="shell">
+<div class="shell" class:focus={layout.focus && app.route.view === 'chat'}>
   <nav class="rail" aria-label={t('Main')}>
     <a class="brand" href="#/chat">Athena</a>
     <div class="rail-links">

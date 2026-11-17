@@ -184,3 +184,14 @@ what seemed right, and any of them can be changed. Newest last.
     Chatterbox (a Norwegian fine-tune) on the GPU.
 64. **default** A mail tool call in a dry run (no mail server) answers "NOT SENT" in words, so the model cannot
     report it as sent.
+65. **Live mode runs in the browser too** (asked for: Athena on any device, the client thin). The chat has a live
+    button; the page listens, speaks and sees like `athena-live`, with the same rules (wake word "Athena", 15 s of
+    follow-up, "stopp" or an open palm to stop, yes or no and thumbs up or down for approvals). The browser only
+    records and plays: it finds speech by loudness and sends each stretch as a WAV to `POST /api/transcribe`, and a
+    small camera picture (320 px JPEG) a few times a second to `POST /api/camera`. All models run on the server:
+    speech to text is whisper.cpp (Whisper small) inside the speech service, started on 127.0.0.1 because it has no
+    sign-in of its own; pose and gestures are the `pose` service (MediaPipe, the same models and rules as the
+    camera page). Neither keeps the audio or the pictures. The browser's own echo cancellation is on, and live mode
+    still drops its own voice by timing and words. Browsers allow the microphone and camera only on https pages.
+66. **default** The chat's side panels can be hidden, per device: the conversation list (its button in the chat's
+    header), and focus, which hides the menu as well. Leaving the chat or opening another conversation ends live mode.

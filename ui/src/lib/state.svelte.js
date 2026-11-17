@@ -12,6 +12,35 @@ export const app = $state({
   models: { models: [], default: '', active: '', switchable: false }, // active '' = the default
 })
 
+function stored(key, def) {
+  try {
+    return localStorage.getItem(key) ?? def
+  } catch {
+    return def
+  }
+}
+function keep(key, value) {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // private window: the choice lasts until the page closes
+  }
+}
+
+// What the chat shows around the conversation, per device: the list of conversations, and focus (no side panels
+// at all, menu included).
+export const layout = $state({ list: stored('athena.list', '1') === '1', focus: stored('athena.focus', '0') === '1' })
+
+export function toggleList() {
+  layout.list = !layout.list
+  keep('athena.list', layout.list ? '1' : '0')
+}
+
+export function toggleFocus() {
+  layout.focus = !layout.focus
+  keep('athena.focus', layout.focus ? '1' : '0')
+}
+
 function parse(hash) {
   const [view = 'chat', id = ''] = hash.replace(/^#\/?/, '').split('/')
   return { view: view || 'chat', id }

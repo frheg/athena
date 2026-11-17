@@ -11,7 +11,8 @@ for t in core mcp-web mcp-sources mcp-everyday mcp-notes mcp-cluster-read mcp-cl
 done
 docker build -q -t "athena-ui:$ver" ui >/dev/null
 docker build -q -t "athena-speech:$ver" speech >/dev/null
-for t in core mcp-web mcp-sources mcp-everyday mcp-notes mcp-cluster-read mcp-cluster-act memory notify files ui speech; do
+docker build -q -t "athena-pose:$ver" pose >/dev/null
+for t in core mcp-web mcp-sources mcp-everyday mcp-notes mcp-cluster-read mcp-cluster-act memory notify files ui speech pose; do
   skopeo --insecure-policy copy -q --dest-tls-verify=false "docker-daemon:athena-$t:$ver" "docker://$reg/athena-$t:$ver"
   d=$(skopeo inspect --tls-verify=false --format '{{.Digest}}' "docker://$reg/athena-$t:$ver")
   echo "athena-$t $ver $d"

@@ -3,7 +3,7 @@
   import { get, post, patch, put, del, stream, upload } from '../lib/api.js'
   import { t } from '../lib/i18n.js'
   import { when, num, dur, bytes } from '../lib/format.js'
-  import { app, go, toast, onOwnerEvent, refreshStats, refreshModels } from '../lib/state.svelte.js'
+  import { app, go, toast, onOwnerEvent, refreshStats, refreshModels, layout, toggleList, toggleFocus } from '../lib/state.svelte.js'
   import Icon from '../lib/Icon.svelte'
   import Kpi from '../lib/Kpi.svelte'
   import Answer from './parts/Answer.svelte'
@@ -12,6 +12,8 @@
   import Attachments from './parts/Attachments.svelte'
   import VolumeControl from './parts/VolumeControl.svelte'
   import { player, speak, stop as stopSpeech, toggleAuto, setTarget, refreshSpeakers } from '../lib/speech.svelte.js'
+  import LivePanel from './parts/LivePanel.svelte'
+  import { live as voiceMode, start as startLive, stop as stopLive } from '../lib/live/live.svelte.js'
 
   let canSpeak = $derived(!!app.status?.info?.speech)
 
@@ -27,7 +29,7 @@
   let scroller
   let stop = null
   let reloadTimer
-  let picker
+  let picker = $state()
   // files on their way into the next message: {key, name, size, progress, file (when stored), error}
   let pending = $state([])
   let dragging = $state(false)
@@ -101,7 +103,7 @@
           break
         case 'done':
           live = null
-          if (player.auto && canSpeak && d?.message_id) speak(d.message_id)
+          if (player.auto && canSpeak && d?.message_id && !voiceMode.on) speak(d.message_id) // live mode speaks itself
           load(id)
           loadSessions()
           refreshStats()
@@ -198,6 +200,32 @@
       toast(e.message)
     } finally {
       sending = false
+    }
+  }
+
+  // live mode: talk with Athena out loud in this conversation (a new one, named "Live" and the time, when none is open)
+  async function goLive() {
+    stopSpeech()
+    try {
+      let sid = id
+      if (!sid) {
+        const now = new Date()
+        const stamp = now.toLocaleDateString('sv-SE') + ' ' + now.toTimeString().slice(0, 5)
+        sid = (await post('/sessions', { title: 'Live ' + stamp })).session.id
+      }
+      await startLive(sid, {
+        camera: !!app.status?.info?.camera,
+        onturn: async (turn) => {
+          await load(sid)
+          follow(turn)
+        },
+      })
+      if (sid !== id) {
+        await loadSessions()
+        go('chat', sid)
+      }
+    } catch (e) {
+      toast(e.name === 'NotAllowedError' ? t('The browser was not allowed to use the microphone.') : e.message)
     }
   }
 
@@ -299,12 +327,17 @@
 
   $effect(() => {
     load(id)
+    const cur = id
+    untrack(() => voiceMode.on && voiceMode.session !== cur && stopLive()) // live mode belongs to one conversation
     return () => {
       if (stop) stop()
       stop = null
       live = null
     }
   })
+
+  // leaving the chat ends live mode (microphone and camera off)
+  $effect(() => () => untrack(() => voiceMode.on && stopLive()))
 
   $effect(() => {
     untrack(loadSessions)
@@ -331,7 +364,7 @@
 </script>
 
 <div class="chat">
-  <aside class="sessions" class:show={showList}>
+  <aside class="sessions" class:show={showList} class:hidden={!layout.list || layout.focus}>
     <div class="sessions-head">
       <div class="row">
         <span class="label grow">{t('Conversations')} <span class="num">{sessions.length}</span></span>
@@ -363,6 +396,10 @@
   <section class="conversation">
     <header class="conv-head">
       <button class="ghost icon-btn list-toggle" onclick={() => (showList = !showList)} aria-label={t('Conversations')}><Icon name="menu" /></button>
+      {#if !layout.focus}
+        <button class="ghost icon-btn list-toggle-wide" onclick={toggleList} aria-pressed={layout.list}
+          title={layout.list ? t('Hide the conversations') : t('Show the conversations')} aria-label={t('Conversations')}><Icon name="sidebar" /></button>
+      {/if}
       <div class="conv-title">
         <h3>{data ? data.session.title || t('New conversation') : t('New conversation')}</h3>
         {#if totals}
@@ -379,6 +416,8 @@
         <button class="ghost icon-btn" onclick={rename} title={t('Rename')} aria-label={t('Rename')}><Icon name="edit" size={16} /></button>
         <button class="ghost icon-btn" onclick={archive} title={t('Archive')} aria-label={t('Archive')}><Icon name="trash" size={16} /></button>
       {/if}
+      <button class="ghost icon-btn" onclick={toggleFocus} aria-pressed={layout.focus}
+        title={layout.focus ? t('Show the menu and conversations') : t('Focus: hide the menu and conversations')} aria-label={t('Focus')}><Icon name={layout.focus ? 'collapse' : 'expand'} size={16} /></button>
     </header>
 
     <div class="messages" bind:this={scroller}>
@@ -453,6 +492,9 @@
     </div>
 
     <div class="composer-wrap">
+      {#if voiceMode.on}
+        <LivePanel />
+      {:else}
       <form class="composer" class:dragging onsubmit={(e) => { e.preventDefault(); send() }}
         ondragover={(e) => { e.preventDefault(); dragging = true }} ondragleave={() => (dragging = false)} ondrop={drop}>
         {#if pending.length}
@@ -510,6 +552,9 @@
               </select>
               {#each player.speakers.filter((s) => s.name === player.target) as s (s.name)}<VolumeControl speaker={s} compact />{/each}
             {/if}
+            <button type="button" class="ghost icon-btn" onclick={goLive} disabled={voiceMode.starting || sending}
+              title={window.isSecureContext ? t('Live mode: talk with Athena out loud, with the camera') : t('Live mode needs Athena on an https:// address')}
+              aria-label={t('Live mode')}><Icon name="live" size={17} /></button>
           {/if}
           <span class="mono-sm hide-narrow">{t('Enter to send, Shift+Enter for a new line')}</span>
           {#if live}
@@ -519,6 +564,7 @@
           {/if}
         </div>
       </form>
+      {/if}
     </div>
   </section>
 </div>

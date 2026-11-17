@@ -1,9 +1,12 @@
-"""speech: text to speech for assistants, with Piper and Kokoro voices, behind an OpenAI-compatible API.
+"""speech: text to speech (Piper and Kokoro voices) and speech to text (whisper.cpp) for assistants, behind an
+OpenAI-compatible API.
 
     POST /v1/audio/speech   {"input": "...", "voice": "auto" | "<voice id>", "speaker": 0, "speed": 1.0,
                              "voices": {"no": "<id>", "en": "<id>"}}  ->  audio/wav
                             "auto" picks Norwegian or English from the text; "voices" overrides the defaults for that.
                             A voice written "<id>:<n>" is speaker n of a voice with several.
+    POST /v1/audio/transcriptions   multipart/form-data with "file" (WAV) and optionally "prompt" -> {"text": "..."};
+                            done by a whisper.cpp server this process starts on 127.0.0.1
     GET  /v1/models         the voices: id, language, speakers
     GET  /health, /ready
 
@@ -13,9 +16,12 @@ Environment:
     DEFAULT_VOICES  language=voice pairs for "auto", default no=no_NO-talesyntese-medium,en=kokoro-af_heart
     TOKENS          caller=token pairs; a request must carry "Authorization: Bearer <token>". Empty = no check.
     LISTEN          host:port, default 0.0.0.0:8080
+    WHISPER_MODEL   the speech recognition model, default VOICES_DIR/whisper/ggml-small-q5_1.bin ("" turns it off)
+    WHISPER_THREADS CPU threads for speech recognition, default 4
 
 Python and the standard library only, besides Piper (GPL-3.0) and Kokoro (Apache 2.0): one process, a thread per request,
 a lock per voice. Kokoro sounds more natural and has English only; Piper speaks Norwegian. Text is limited to 5000 characters a request; callers split longer text.
+whisper.cpp's server has no sign-in of its own, so it listens on 127.0.0.1 only and this process checks the token.
 """
 
 import hmac
@@ -24,8 +30,12 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import threading
+import time
+import urllib.error
+import urllib.request
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -57,6 +67,10 @@ KOKORO = ["af_heart", "af_bella", "af_nicole", "af_sarah", "af_nova", "am_michae
           "bf_emma", "bf_isabella", "bf_alice", "bm_george", "bm_fable", "bm_daniel"]
 KOKORO_DIR = os.path.join(VOICES_DIR, "kokoro")
 TOKENS = pairs(os.environ.get("TOKENS", ""))
+WHISPER_MODEL = os.environ.get("WHISPER_MODEL", os.path.join(VOICES_DIR, "whisper", "ggml-small-q5_1.bin"))
+WHISPER_THREADS = os.environ.get("WHISPER_THREADS", "4")
+WHISPER_ADDR = ("127.0.0.1", 8081)
+MAX_AUDIO = 10 << 20  # bytes: about 5 minutes of 16 kHz speech
 
 
 def available():
@@ -135,6 +149,44 @@ def synthesize(text, vid, speaker=None, speed=1.0):
     return buf.getvalue()
 
 
+def whisper_cmd():
+    # -ac 768: a shorter audio window (speech up to about 15 s), about twice as fast as the full 30 s;
+    # -bs 1 -bo 1: greedy, no beam search; -nf: no retries at higher temperature (they make text up from noise)
+    return ["whisper-server", "--host", WHISPER_ADDR[0], "--port", str(WHISPER_ADDR[1]), "-m", WHISPER_MODEL,
+            "-t", WHISPER_THREADS, "-ac", "768", "-bs", "1", "-bo", "1", "-nf", "-fa", "-l", "auto"]
+
+
+def keep_whisper():
+    """Runs the whisper.cpp server, and again whenever it stops."""
+    while True:
+        try:
+            p = subprocess.Popen(whisper_cmd(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as e:
+            log.error("speech recognition does not start: %s", e)
+            return
+        code = p.wait()
+        log.warning("speech recognition stopped (exit %s); starting it again", code)
+        time.sleep(2)
+
+
+def transcribe(body, ctype):
+    """Hands a multipart request to whisper.cpp; returns (status, result)."""
+    req = urllib.request.Request(f"http://{WHISPER_ADDR[0]}:{WHISPER_ADDR[1]}/inference", data=body,
+                                 headers={"Content-Type": ctype}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as res:
+            out = json.loads(res.read(1 << 20) or b"{}")
+    except urllib.error.HTTPError as e:
+        return 502, {"error": f"speech recognition: {e.code} {e.read(500).decode(errors='replace').strip()}"}
+    except (urllib.error.URLError, OSError) as e:
+        return 503, {"error": f"speech recognition is not ready: {e}"}
+    except json.JSONDecodeError:
+        return 502, {"error": "speech recognition answered something that is not JSON"}
+    if out.get("error"):
+        return 502, {"error": "speech recognition: " + str(out["error"])}
+    return 200, {"text": " ".join(str(out.get("text", "")).split())}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "speech"
     sys_version = ""
@@ -184,6 +236,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.allowed():
             return self.error(401, "unknown caller")
+        if self.path == "/v1/audio/transcriptions":
+            return self.transcription()
         if self.path != "/v1/audio/speech":
             return self.error(404, "no such endpoint")
         try:
@@ -225,6 +279,21 @@ class Handler(BaseHTTPRequestHandler):
             return self.error(500, f"synthesis failed: {e}")
         self.send(200, audio, "audio/wav", {"X-Voice": vid, "X-Language": lang or voices[vid]})
 
+    def transcription(self):
+        if not WHISPER_MODEL:
+            return self.error(503, "speech recognition is off")
+        ctype = self.headers.get("Content-Type", "")
+        if not ctype.startswith("multipart/form-data"):
+            return self.error(400, "send multipart/form-data with the audio as file")
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            n = 0
+        if n <= 0 or n > MAX_AUDIO:
+            return self.error(413, "the audio is empty or too long")
+        code, out = transcribe(self.rfile.read(n), ctype)
+        self.send(code, out)
+
 
 def main():
     logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='{"time":"%(asctime)s","level":"%(levelname)s","msg":"%(message)s"}')
@@ -238,6 +307,11 @@ def main():
         return
     host, port = os.environ.get("LISTEN", "0.0.0.0:8080").rsplit(":", 1)
     log.info("voices: %s; defaults: %s; auth: %s", ", ".join(available()), DEFAULTS, bool(TOKENS))
+    if WHISPER_MODEL and os.path.exists(WHISPER_MODEL):
+        threading.Thread(target=keep_whisper, daemon=True).start()
+        log.info("speech recognition: %s, %s threads", os.path.basename(WHISPER_MODEL), WHISPER_THREADS)
+    elif WHISPER_MODEL:
+        log.warning("no speech recognition: %s is missing", WHISPER_MODEL)
     ThreadingHTTPServer((host, int(port)), Handler).serve_forever()
 
 

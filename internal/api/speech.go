@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -188,4 +189,31 @@ func (a *API) speakText(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAudio(w, b, voice, 0)
+}
+
+// transcribe writes down speech for live mode in the browser: the body is a WAV (16 kHz mono is best, a few seconds),
+// ?prompt= helps spell names such as the wake word. The audio is not kept.
+func (a *API) transcribe(w http.ResponseWriter, r *http.Request) {
+	if a.speechOff(w) {
+		return
+	}
+	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+	if err != nil {
+		fail(w, bad("the audio is larger than 4 MB: send shorter pieces"))
+		return
+	}
+	if len(b) < 44 || string(b[:4]) != "RIFF" || string(b[8:12]) != "WAVE" {
+		fail(w, bad("send the audio as a WAV file"))
+		return
+	}
+	prompt := r.URL.Query().Get("prompt")
+	if len(prompt) > 200 {
+		prompt = prompt[:200]
+	}
+	text, err := a.Speech.Transcribe(r.Context(), b, prompt)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"text": text})
 }
